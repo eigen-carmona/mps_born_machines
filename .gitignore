@@ -127,3 +127,46 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+# Ignore all pdfs in case I upload a paper again
+*.pdf
+
+!report.pdf # Doing an expection for report.pdf (our report)
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# LaTeX related
+svg-inkscape/
+_minted*/
+*.aux
+*.glo
+*.idx
+*.log
+*.toc
+*.ist
+*.acn
+*.acr
+*.alg
+*.bbl
+*.blg
+*.dvi
+*.glg
+*.gls
+*.ilg
+*.ind
+*.lof
+*.lot
+*.maf
+*.mtc
+*.mtc1
+*.out
+*.nav
+*.snm
+*.synctex.gz
+*.vrb
+
+
+#MNIST PyTorch Files
+*ubyte
+*ubyte.gz
