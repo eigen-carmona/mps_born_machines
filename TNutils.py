@@ -20,6 +20,7 @@ import tqdm.notebook as tq
 import quimb.tensor as qtn # Tensor Network library
 import quimb
 
+from collections import deque
 #######################################################
 
 '''
@@ -443,21 +444,75 @@ def learning_epoch(mps, imgs, epochs, lr):
     At tensor max-2, apply learning_step() sliding to the left back to tensor 1
     '''
     
-    # [1,2,...,780,781,780,...,2,1]
-    progress = tq.tqdm([i for i in range(1,len(mps.tensors)-2)] + [i for i in range(len(mps.tensors)-3,0,-1)], leave=True)
-        
-    # Firstly we slide right 
-    going_right = True
-    for index in progress:
-        A = learning_step(mps,index,imgs,lr, going_right)
-        
-        mps.tensors[index].modify(data=np.transpose(A.tensors[0].data,(0,2,1)))
-        mps.tensors[index+1].modify(data=A.tensors[1].data)
+    for epoch in range(epochs):
+        # [1,2,...,780,781,780,...,2,1]
+        progress = tq.tqdm([i for i in range(1,len(mps.tensors)-2)] + [i for i in range(len(mps.tensors)-3,0,-1)], leave=True)
 
-        #p0 = computepsi(mps,imgs[0])**2
-        #progress.set_description('P(0) = {}'.format(p0))
-        
-        if index == len(mps.tensors)-3 :
-            going_right = False
+        # Firstly we slide right 
+        going_right = True
+        for index in progress:
+            A = learning_step(mps,index,imgs,lr, going_right)
+
+            mps.tensors[index].modify(data=np.transpose(A.tensors[0].data,(0,2,1)))
+            mps.tensors[index+1].modify(data=A.tensors[1].data)
+
+            #p0 = computepsi(mps,imgs[0])**2
+            progress.set_description('Left Index: {}'.format(index))
+
+            if index == len(mps.tensors)-3 :
+                going_right = False
             
     # cha cha real smooth
+    
+#   _  _    
+#  | || |   
+#  | || |_  
+#  |__   _| 
+#     |_|(_) GENERATION
+#######################################################            
+
+def generate_sample(mps):
+    
+    mps = mps / mps.norm()
+    
+    # It is clear that this can be easily performed if we 
+    # have gauged all the tensors except A_N to be left canonical 
+    mps.left_canonize()
+    
+    # First pixel
+    #   +----In    +
+    #   |     |    | half_contr
+    #   |     vn   +
+    #   |     vn
+    #   |     |
+    #   +----In
+    half_contr = np.einsum('a,ba', [0,1], mps.tensors[-1].data)
+    p =  half_contr @ half_contr
+    
+    if np.random.rand() < p:
+        generated = deque([0])
+    else:
+        generated = deque([1])
+        half_contr = np.einsum('a,ba', [1,0], mps.tensors[-1].data)
+        p =  half_contr @ half_contr
+        
+    previous_contr = half_contr
+        
+    for index in range(len(mps.tensors)-2,0,-1):
+        new_contr = np.einsum('a,bca->bc', [0,1], mps.tensors[index].data)
+        new_contr = np.einsum('ab,b', new_contr, previous_contr)
+    
+        p = (new_contr @ new_contr)/(previous_contr @ previous_contr)
+        
+        if np.random.rand() < p:
+            generated.appendleft(0)
+        else:
+            generated.appendleft(1)
+            new_contr = np.einsum('a,bca->bc', [1,0], mps.tensors[index].data)
+            new_contr = np.einsum('ab,b', new_contr, previous_contr)
+            
+            p = (new_contr @ new_contr)/(previous_contr @ previous_contr)
+            
+        previous_contr = new_contr
+        
+    return generated
