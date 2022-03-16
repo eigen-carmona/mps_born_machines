@@ -362,6 +362,21 @@ def computepsiprime(mps, img, contracted_left_index):
     
     return contraction
 
+def computeNLL(mps, imgs):
+    '''
+    Computes the Negative Log Likelihood of a Tensor Network (mps)
+    over a set of images (imgs)
+    
+     > NLL = -(1/|T|) * SUM_{v\in T} ( ln P(v) ) = -(1/|T|) * SUM_{v\in T} ( ln psi(v)**2 )
+           = -(2/|T|) * SUM_{v\in T} ( ln |psi(v)| )
+    '''
+    
+    lnsum = 0
+    for img in imgs:
+        lnsum = lnsum + np.log( abs(computepsi(mps,img)) )
+        
+    return - 2 * lnsum / imgs.shape[0]
+
 #   _____  
 #  |___ /  
 #    |_ \  
