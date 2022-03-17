@@ -499,11 +499,58 @@ def learning_epoch_sgd(mps, imgs, epochs, lr, batch_size = 25):
 #######################################################            
 
 def generate_sample(mps):
+    '''
+    Generate a sample from an MPS.
+    0. normalize the mps (probabilities need to be computed)
+    1. left canonize the mps (to easily compute the conditional probabilities
+    2. Starting from the last pixel (vN):
+                                                 __                       __
+                                 +---IN         |     +---IN      +---IN    |
+                                 |   |       /  |     |   |       |   |     |
+                                 | [0,1]    /   |     | [0,1]   + | [1,0]   |
+      2.1 P(vN = [0,1]) =        | [0,1]   /    |     | [0,1]     | [1,0]   |
+                                 |   |          |     |   |       |   |     |
+                                 +---IN         |__   +---+       +---+   __|
+                                 
+          (The denominator are the sum of probabilities that 
+           saturates the state space, the sum of their probabilities,
+           being the MPS normalized, is just 1.
+           
+        2.1.1 Compute the probability of VN being [0,1] then draw a random
+              number between 0 and 1, if the random number is less than
+              the probabiity computed vN becomes [0,1], else [1,0]
+              
+              vN then becomes either [0,1] or [1,0] (for the next steps too)
+         
+         
+                                  
+      2.k P(vK = [0,1]| v{K+1], ..., vN) = P(vK, v{K+1}, vN) / P(v{K+1}, ..., vN) =
+      
+             =   +---IK---I{K+1}---...---IN         I{K+1}---...---IN
+                 |   |    |              |      /   |              |
+                 | [0,1]  v{K+1}         vN    /    v{K+1}         vN
+                 | [0,1]  v{K+1}         vN   /     v{K+1}         vN
+                 |   |    |              |   /      |              |
+                 +---IK---I{K+1}---...---IN         I{K+1}---...---IN
+                 
+        2.k.1 Compute the probability of vK being [0,1] then draw a random
+              number between 0 and 1, if the random number is less than
+              the probabiity computed vN becomes [0,1], else [1,0]
+              
+              vK then becomes either [0,1] or [1,0] (for the next steps too)
+              
+       .
+       .
+       .
+    '''
     
     mps = mps / mps.norm()
     
-    # It is clear that this can be easily performed if we 
-    # have gauged all the tensors except A_N to be left canonical 
+    # Canonicalize left
+    # We use the property of canonicalization to easily write
+    # conditional probabilities
+    # By left canonicalizing we will sample from right (784th pixel)
+    # to left (1st pixel)
     mps.left_canonize()
     
     # First pixel
@@ -513,6 +560,9 @@ def generate_sample(mps):
     #   |     vn
     #   |     |
     #   +----In
+    # To reach efficiency, we gradually contract half_contr with 
+    # the other tensors
+    # Contract vN to IN
     half_contr = np.einsum('a,ba', [0,1], mps.tensors[-1].data)
     p =  half_contr @ half_contr
     
@@ -520,13 +570,21 @@ def generate_sample(mps):
         generated = deque([0])
     else:
         generated = deque([1])
+        # We need to reconstruct half_contr that will be used for the
+        # next pixel
+        # Contract vN to IN
         half_contr = np.einsum('a,ba', [1,0], mps.tensors[-1].data)
         p =  half_contr @ half_contr
         
     previous_contr = half_contr
         
     for index in range(len(mps.tensors)-2,0,-1):
+        # Contract vK to IK
         new_contr = np.einsum('a,bca->bc', [0,1], mps.tensors[index].data)
+        # Contract new_contr to the contraction at the previous step
+        #   O-- previous_contr
+        #   |                  => new_contr -- previous_contr
+        #   vK
         new_contr = np.einsum('ab,b', new_contr, previous_contr)
     
         p = (new_contr @ new_contr)/(previous_contr @ previous_contr)
@@ -535,6 +593,7 @@ def generate_sample(mps):
             generated.appendleft(0)
         else:
             generated.appendleft(1)
+            # Contract [1,0] instead of [0,1]
             new_contr = np.einsum('a,bca->bc', [1,0], mps.tensors[index].data)
             new_contr = np.einsum('ab,b', new_contr, previous_contr)
             
