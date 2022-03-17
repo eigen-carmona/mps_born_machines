@@ -541,5 +541,16 @@ def generate_sample(mps):
             p = (new_contr @ new_contr)/(previous_contr @ previous_contr)
             
         previous_contr = new_contr
+    
+    # Last pixel
+    new_contr = np.einsum('a,ba', [0,1], mps.tensors[0].data)
+    new_contr = new_contr @ previous_contr
+    
+    p = (new_contr**2)/(previous_contr @ previous_contr)
+    
+    if np.random.rand() < p:
+        generated.appendleft(0)
+    else:
+        generated.appendleft(1)
         
     return generated
