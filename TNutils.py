@@ -20,6 +20,12 @@ import tqdm.notebook as tq
 import quimb.tensor as qtn # Tensor Network library
 import quimb
 
+from collections import deque
+
+# Profiling
+import cProfile, pstats, io
+from pstats import SortKey
+
 #######################################################
 
 '''
@@ -38,6 +44,21 @@ def arg_val(*args):
         return validating
     return wrapper
 
+def pro_profiler(func):
+    '''Generic profiler. Expects an argument-free function.
+    e. g. func = lambda: learning_epoch_SGD(mps, imgs, 3, 0.1).
+    Prints and returns the profiling report trace.'''
+    # TODO: adapt to write trace to file
+    pr = cProfile.Profile()
+    pr.enable()
+    func()
+    pr.disable()
+    s = io.StringIO()
+    sortby = SortKey.CUMULATIVE
+    ps = pstats.Stats(pr, stream=s).sort_stats(sortby)
+    ps.print_stats()
+    print(s.getvalue())
+    return s
          
 #   ___     
 #  |_  |    
@@ -362,6 +383,21 @@ def computepsiprime(mps, img, contracted_left_index):
     
     return contraction
 
+def computeNLL(mps, imgs):
+    '''
+    Computes the Negative Log Likelihood of a Tensor Network (mps)
+    over a set of images (imgs)
+    
+     > NLL = -(1/|T|) * SUM_{v\in T} ( ln P(v) ) = -(1/|T|) * SUM_{v\in T} ( ln psi(v)**2 )
+           = -(2/|T|) * SUM_{v\in T} ( ln |psi(v)| )
+    '''
+    
+    lnsum = 0
+    for img in imgs:
+        lnsum = lnsum + np.log( abs(computepsi(mps,img)) )
+        
+    return - 2 * lnsum / imgs.shape[0]
+
 #   _____  
 #  |___ /  
 #    |_ \  
@@ -376,10 +412,12 @@ def learning_step(mps, index, imgs, lr, going_right = True):
       UPDATE RULE:  A_{i,i+1} += lr* 2 *( A_{i,i+1}/Z - ( SUM_{i=1}^{m} psi'(v)/psi(v) )/m )
       
     '''
-    Z = mps @ mps 
     
     # Merge I_k and I_{k+1} in a single rank 4 tensor ('i_{k-1}', 'v_k', 'i_{k+1}', 'v_{k+1}')
     A = (mps.tensors[index] @ mps.tensors[index+1])
+    
+    # Assumption: The mps is canonized
+    Z = A@A
     
     # Computing the second term, summation over
     # the data-dependent terms
@@ -421,28 +459,98 @@ def learning_step(mps, index, imgs, lr, going_right = True):
     # SD.tensors[1] -> I_{index+1}
     return SD
 
-def learning_epoch(mps, imgs, epochs, lr):
+def learning_epoch_sgd(mps, imgs, epochs, lr, batch_size = 25):
     '''
     Manages the sliding left and right.
     From tensor 1 (the second), apply learning_step() sliding to the right
     At tensor max-2, apply learning_step() sliding to the left back to tensor 1
     '''
     
+    # We expect, however, that the batch size is smaler than the input set
+    batch_size = min(len(imgs),batch_size)
+    guide = np.arange(len(imgs))
+    
     # [1,2,...,780,781,780,...,2,1]
     progress = tq.tqdm([i for i in range(1,len(mps.tensors)-2)] + [i for i in range(len(mps.tensors)-3,0,-1)], leave=True)
         
-    # Firstly we slide right 
+    # Firstly we slide right
     going_right = True
     for index in progress:
-        A = learning_step(mps,index,imgs,lr, going_right)
+        np.random.shuffle(guide)
+        mask = guide[:batch_size]
+        A = learning_step(mps,index,imgs[mask],lr, going_right)
         
         mps.tensors[index].modify(data=np.transpose(A.tensors[0].data,(0,2,1)))
         mps.tensors[index+1].modify(data=A.tensors[1].data)
 
         #p0 = computepsi(mps,imgs[0])**2
-        #progress.set_description('P(0) = {}'.format(p0))
+        progress.set_description('Left Index: {}'.format(index))
         
         if index == len(mps.tensors)-3 :
             going_right = False
             
     # cha cha real smooth
+    
+#   _  _    
+#  | || |   
+#  | || |_  
+#  |__   _| 
+#     |_|(_) GENERATION
+#######################################################            
+
+def generate_sample(mps):
+    
+    mps = mps / mps.norm()
+    
+    # It is clear that this can be easily performed if we 
+    # have gauged all the tensors except A_N to be left canonical 
+    mps.left_canonize()
+    
+    # First pixel
+    #   +----In    +
+    #   |     |    | half_contr
+    #   |     vn   +
+    #   |     vn
+    #   |     |
+    #   +----In
+    half_contr = np.einsum('a,ba', [0,1], mps.tensors[-1].data)
+    p =  half_contr @ half_contr
+    
+    if np.random.rand() < p:
+        generated = deque([0])
+    else:
+        generated = deque([1])
+        half_contr = np.einsum('a,ba', [1,0], mps.tensors[-1].data)
+        p =  half_contr @ half_contr
+        
+    previous_contr = half_contr
+        
+    for index in range(len(mps.tensors)-2,0,-1):
+        new_contr = np.einsum('a,bca->bc', [0,1], mps.tensors[index].data)
+        new_contr = np.einsum('ab,b', new_contr, previous_contr)
+    
+        p = (new_contr @ new_contr)/(previous_contr @ previous_contr)
+        
+        if np.random.rand() < p:
+            generated.appendleft(0)
+        else:
+            generated.appendleft(1)
+            new_contr = np.einsum('a,bca->bc', [1,0], mps.tensors[index].data)
+            new_contr = np.einsum('ab,b', new_contr, previous_contr)
+            
+            p = (new_contr @ new_contr)/(previous_contr @ previous_contr)
+            
+        previous_contr = new_contr
+    
+    # Last pixel
+    new_contr = np.einsum('a,ba', [0,1], mps.tensors[0].data)
+    new_contr = new_contr @ previous_contr
+    
+    p = (new_contr**2)/(previous_contr @ previous_contr)
+    
+    if np.random.rand() < p:
+        generated.appendleft(0)
+    else:
+        generated.appendleft(1)
+        
+    return generated
