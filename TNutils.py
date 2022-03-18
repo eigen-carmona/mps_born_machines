@@ -493,6 +493,9 @@ def learning_epoch_sgd(mps, imgs, epochs, lr, batch_size = 25):
     batch_size = min(len(imgs),batch_size)
     guide = np.arange(len(imgs))
     
+    # TODO: shouldn't we also consider 0 and 782 here?
+    # psi_primed is compatible with this
+    # however, computepsiprime only works with:
     # [1,2,...,780,781,780,...,2,1]
     progress = tq.tqdm([i for i in range(1,len(mps.tensors)-2)] + [i for i in range(len(mps.tensors)-3,0,-1)], leave=True)
         
