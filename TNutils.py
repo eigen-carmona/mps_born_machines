@@ -244,6 +244,12 @@ def quimb_transform_img2state(img):
     # O  O ... O
     return img_TN
 
+stater = lambda x: [0,1] if x == 0 else [1,0]
+def tens_picture(picture):
+    '''Converts an array of bits into a list of tensors compatible with a tensor network.'''
+    tens = [qtn.Tensor(stater(n),inds=(f'v{i}',)) for i, n in enumerate(picture)]
+    return tens
+
 def computepsi(mps, img):
     '''
     Contract the MPS with the states (pixels) of a binary{0,1} image
