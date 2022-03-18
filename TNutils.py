@@ -446,8 +446,9 @@ def learning_step(mps, index, imgs, lr, going_right = True):
     # the data-dependent terms
     psifrac = 0
     for img in imgs:
-        num = computepsiprime(mps,img,index)  # PSI(v)
-        den = computepsi(mps,img)             # PSI(v')
+        num = computepsiprime(mps,img,index)    # PSI'(v)
+        # TODO: 'ijkl,ilkj' or 'ijkl,ijkl'?
+        den = np.einsum('ijkl,ijkl',A.data,num) # PSI(v)
         
         # Theoretically the two computations above can be optimized in a single function
         # because we are contracting the very same tensors for the most part
