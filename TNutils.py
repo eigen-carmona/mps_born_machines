@@ -389,6 +389,23 @@ def computepsiprime(mps, img, contracted_left_index):
     
     return contraction
 
+def psi_primed(mps,_img,index):
+    # quimby contraction. Currently not faster than einsum implementation
+    # Requires _img to be provided in a quimby friendly format
+    # Achievable with tens_picture
+    contr_L = qtn.Tensor() if index == 0 else mps[0]@_img[0]
+    for i in range(1,index,1):
+        # first, contr_Lact with the other matrix
+        contr_L = contr_L@mps[i]
+        # then, with the qubit
+        contr_L = contr_L@_img[i]
+    contr_R = qtn.Tensor() if index == len(_img)-1 else mps[-1]@_img[-1]
+    for i in range(len(_img)-2,index+1,-1):
+        contr_R = mps[i]@contr_R
+        contr_R = _img[i]@contr_R
+    psi_p = contr_L@_img[index]@_img[index+1]@contr_R
+    return psi_p
+
 def computeNLL(mps, imgs):
     '''
     Computes the Negative Log Likelihood of a Tensor Network (mps)
