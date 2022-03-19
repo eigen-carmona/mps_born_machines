@@ -244,6 +244,12 @@ def quimb_transform_img2state(img):
     # O  O ... O
     return img_TN
 
+stater = lambda x: [0,1] if x == 0 else [1,0]
+def tens_picture(picture):
+    '''Converts an array of bits into a list of tensors compatible with a tensor network.'''
+    tens = [qtn.Tensor(stater(n),inds=(f'v{i}',)) for i, n in enumerate(picture)]
+    return tens
+
 def computepsi(mps, img):
     '''
     Contract the MPS with the states (pixels) of a binary{0,1} image
@@ -383,6 +389,23 @@ def computepsiprime(mps, img, contracted_left_index):
     
     return contraction
 
+def psi_primed(mps,_img,index):
+    # quimby contraction. Currently not faster than einsum implementation
+    # Requires _img to be provided in a quimby friendly format
+    # Achievable with tens_picture
+    contr_L = qtn.Tensor() if index == 0 else mps[0]@_img[0]
+    for i in range(1,index,1):
+        # first, contr_Lact with the other matrix
+        contr_L = contr_L@mps[i]
+        # then, with the qubit
+        contr_L = contr_L@_img[i]
+    contr_R = qtn.Tensor() if index == len(_img)-1 else mps[-1]@_img[-1]
+    for i in range(len(_img)-2,index+1,-1):
+        contr_R = mps[i]@contr_R
+        contr_R = _img[i]@contr_R
+    psi_p = contr_L@_img[index]@_img[index+1]@contr_R
+    return psi_p
+
 def computeNLL(mps, imgs):
     '''
     Computes the Negative Log Likelihood of a Tensor Network (mps)
@@ -423,8 +446,12 @@ def learning_step(mps, index, imgs, lr, going_right = True):
     # the data-dependent terms
     psifrac = 0
     for img in imgs:
-        num = computepsiprime(mps,img,index)  # PSI(v)
-        den = computepsi(mps,img)             # PSI(v')
+        num = computepsiprime(mps,img,index)    # PSI'(v)
+        # 'ijkl,ilkj' or 'ijkl,ijkl'?
+        # computepsiprime was coded so that the ordering of the indexes is the same
+        # as the contraction A = mps.tensors[index] @ mps.tensors[index+1]
+        # so it should be the second one    
+        den = np.einsum('ijkl,ijkl',A.data,num) # PSI(v)
         
         # Theoretically the two computations above can be optimized in a single function
         # because we are contracting the very same tensors for the most part
@@ -470,6 +497,9 @@ def learning_epoch_sgd(mps, imgs, epochs, lr, batch_size = 25):
     batch_size = min(len(imgs),batch_size)
     guide = np.arange(len(imgs))
     
+    # TODO: shouldn't we also consider 0 and 782 here?
+    # psi_primed is compatible with this
+    # however, computepsiprime only works with:
     # [1,2,...,780,781,780,...,2,1]
     progress = tq.tqdm([i for i in range(1,len(mps.tensors)-2)] + [i for i in range(len(mps.tensors)-3,0,-1)], leave=True)
         
