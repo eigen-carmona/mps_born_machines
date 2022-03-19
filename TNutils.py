@@ -447,7 +447,10 @@ def learning_step(mps, index, imgs, lr, going_right = True):
     psifrac = 0
     for img in imgs:
         num = computepsiprime(mps,img,index)    # PSI'(v)
-        # TODO: 'ijkl,ilkj' or 'ijkl,ijkl'?
+        # 'ijkl,ilkj' or 'ijkl,ijkl'?
+        # computepsiprime was coded so that the ordering of the indexes is the same
+        # as the contraction A = mps.tensors[index] @ mps.tensors[index+1]
+        # so it should be the second one    
         den = np.einsum('ijkl,ijkl',A.data,num) # PSI(v)
         
         # Theoretically the two computations above can be optimized in a single function
