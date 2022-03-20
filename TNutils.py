@@ -515,33 +515,33 @@ def learning_epoch_sgd(mps, imgs, epochs, lr, batch_size = 25):
     From tensor 1 (the second), apply learning_step() sliding to the right
     At tensor max-2, apply learning_step() sliding to the left back to tensor 1
     '''
-    
+
     # We expect, however, that the batch size is smaler than the input set
     batch_size = min(len(imgs),batch_size)
     guide = np.arange(len(imgs))
-    
+
     # TODO: shouldn't we also consider 0 and 782 here?
     # psi_primed is compatible with this
     # however, computepsiprime only works with:
     # [1,2,...,780,781,780,...,2,1]
     progress = tq.tqdm([i for i in range(1,len(mps.tensors)-2)] + [i for i in range(len(mps.tensors)-3,0,-1)], leave=True)
-        
+
     # Firstly we slide right
     going_right = True
     for index in progress:
         np.random.shuffle(guide)
         mask = guide[:batch_size]
         A = learning_step(mps,index,imgs[mask],lr, going_right)
-        
+
         mps.tensors[index].modify(data=np.transpose(A.tensors[0].data,(0,2,1)))
         mps.tensors[index+1].modify(data=A.tensors[1].data)
 
         #p0 = computepsi(mps,imgs[0])**2
         progress.set_description('Left Index: {}'.format(index))
-        
-        if index == len(mps.tensors)-3 :
+
+        if index == len(mps.tensors)-3:
             going_right = False
-            
+
     # cha cha real smooth
     
 #   _  _    
