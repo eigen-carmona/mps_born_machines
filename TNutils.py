@@ -669,17 +669,18 @@ def learning_step_cached(mps, index, _imgs, lr, img_cache, going_right = True):
     '''
 
     # Merge I_k and I_{k+1} in a single rank 4 tensor ('i_{k-1}', 'v_k', 'i_{k+1}', 'v_{k+1}')
-    A = (mps.tensors[index]@mps.tensors[index+1])
-    Z = A@A
+    A = qtn.tensor_contract(mps[index],mps[index+1])
+    Z = qtn.tensor_contract(A,A)
 
     # Computing the second term, summation over
     # the data-dependent terms
     psifrac = 0
-    for _img,cache in zip(_imgs,img_cache):
-        L, R = cache
-        num = L[index]@R[index+1]@_img[index]@_img[index+1]
-        den = num@A
-
+    for _img,cacha in zip(_imgs,img_cache):
+        L, R = cacha
+        left = tneinsum(L[index],_img[index])
+        right = tneinsum(R[index+1],_img[index+1])
+        num = tneinsum(left,right)
+        den = qtn.tensor_contract(num,A)
 
         # Theoretically the two computations above can be optimized in a single function
         # because we are contracting the very same tensors for the most part
@@ -737,10 +738,12 @@ def learning_epoch_cached(mps, _imgs, epochs, lr,img_cache):
             for i,cache in enumerate(img_cache):
                 if going_right:
                     # updating left
-                    img_cache[i][0][index+1] = mps[index]@cache[0][index]@_imgs[i][index]
+                    left = tneinsum2(mps[index],cache[0][index])
+                    img_cache[i][0][index+1] = tneinsum2(left,_imgs[i][index])
                 else:
                     # updating right
-                    img_cache[i][1][index] = mps[index+1]@cache[1][index+1]@_imgs[i][index+1]
+                    right = tneinsum2(mps[index+1],cache[1][index+1])
+                    img_cache[i][1][index] = tneinsum2(right,_imgs[i][index+1])
             #p0 = computepsi(mps,imgs[0])**2
             progress.set_description('Left Index: {}'.format(index))
 
