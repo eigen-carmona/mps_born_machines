@@ -27,6 +27,10 @@ from collections import deque
 import cProfile, pstats, io
 from pstats import SortKey
 
+import functools
+import collections
+import opt_einsum as oe
+import itertools
 #######################################################
 
 '''
@@ -184,7 +188,17 @@ def partial_removal_img(mnistimg, fraction = .5, axis = 0):
 #    __) |  
 #   / __/ _ 
 #  |_____(_) MPS GENERAL
-#######################################################   
+#######################################################
+
+@functools.lru_cache(2**12)
+def _inds_to_eq(inputs, output):
+    """
+    Conert indexes to the equation of contractions for np.einsum function
+    """
+    symbol_get = collections.defaultdict(map(oe.get_symbol, itertools.count()).__next__).__getitem__
+    in_str = ("".join(map(symbol_get, inds)) for inds in inputs)
+    out_str = "".join(map(symbol_get, output))
+    return ",".join(in_str) + f"->{out_str}"
 
 def tneinsum(tn1,tn2):
     '''
@@ -197,6 +211,22 @@ def tneinsum(tn1,tn2):
     inds_i = tuple([tn1.inds, tn2.inds])
     inds_out = tuple(qtn.tensor_core._gen_output_inds(cytoolz.concat(inds_i)))
     eq = qtn.tensor_core._inds_to_eq(inds_i, inds_out)
+    
+    data = np.einsum(eq,tn1.data,tn2.data)
+    
+    return qtn.Tensor(data=data, inds=inds_out)
+
+def tneinsum2(tn1,tn2):
+    '''
+    Contract tn1 with tn2
+    It is an automated function that automatically contracts the bonds with
+    the same indexes.
+    For simple contractions this function is faster than tensor_contract
+    or @
+    '''
+    inds_i = tuple([tn1.inds, tn2.inds])
+    inds_out = tuple(qtn.tensor_core._gen_output_inds(cytoolz.concat(inds_i)))
+    eq = _inds_to_eq(inds_i, inds_out)
     
     data = np.einsum(eq,tn1.data,tn2.data)
     
