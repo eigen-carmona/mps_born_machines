@@ -543,7 +543,95 @@ def learning_epoch_sgd(mps, imgs, epochs, lr, batch_size = 25):
             going_right = False
 
     # cha cha real smooth
+
+def learning_step_cached(mps, index, _imgs, lr, img_cache, going_right = True):
+    '''
+    Compute the updated merged tensor A_{index,index+1}
     
+      UPDATE RULE:  A_{i,i+1} += lr* 2 *( A_{i,i+1}/Z - ( SUM_{i=1}^{m} psi'(v)/psi(v) )/m )
+    '''
+
+    # Merge I_k and I_{k+1} in a single rank 4 tensor ('i_{k-1}', 'v_k', 'i_{k+1}', 'v_{k+1}')
+    A = (mps.tensors[index]@mps.tensors[index+1])
+    Z = A@A
+
+    # Computing the second term, summation over
+    # the data-dependent terms
+    psifrac = 0
+    for _img,cache in zip(_imgs,img_cache):
+        L, R = cache
+        num = L[index]@R[index+1]@_img[index]@_img[index+1]
+        den = num@A
+
+
+        # Theoretically the two computations above can be optimized in a single function
+        # because we are contracting the very same tensors for the most part
+
+        psifrac = psifrac + num/den
+
+    psifrac = psifrac/len(_imgs)
+
+    # Derivative of the NLL
+    dNLL = (A/Z) - psifrac
+
+    A = A + lr*dNLL # Update A_{i,i+1}
+
+    # Now the tensor A_{i,i+1} must be split in I_k and I_{k+1}.
+    # To preserve canonicalization:
+    # > if we are merging sliding towards the RIGHT we need to absorb right
+    #                                           S  v  D
+    #     ->-->--A_{k,k+1}--<--<-   =>   ->-->-->--x--<--<--<-   =>    >-->-->--o--<--<-
+    #      |  |    |   |    |  |          |  |  |   |    |  |          |  |  |  |  |  |
+    #
+    # > if we are merging sliding toward the LEFT we need to absorb left
+    #
+    if going_right:
+        # FYI: split method does apply SVD by default
+        # there are variations of svd that can be inspected
+        # for a performance boost
+        SD = A.split(['i'+str(index-1),'v'+str(index)], absorb='right')
+    else:
+        SD = A.split(['i'+str(index-1),'v'+str(index)], absorb='left')
+
+    # SD.tensors[0] -> I_{index}
+    # SD.tensors[1] -> I_{index+1}
+    return SD
+
+def learning_epoch_cached(mps, _imgs, epochs, lr,img_cache):
+    '''
+    Manages the sliding left and right.
+    From tensor 1 (the second), apply learning_step() sliding to the right
+    At tensor max-2, apply learning_step() sliding to the left back to tensor 1
+    '''
+    for epoch in range(epochs):
+        print(f'epoch {epoch+1}/{epochs}')
+        # [1,2,...,780,781,780,...,2,1]
+        progress = tq.tqdm([i for i in range(1,len(mps.tensors)-2)] + [i for i in range(len(mps.tensors)-3,0,-1)], leave=True)
+
+        # Firstly we slide right
+        going_right = True
+        for index in progress:
+            A = learning_step_cached(mps,index,_imgs,lr,img_cache,going_right)
+
+            mps.tensors[index].modify(data=np.transpose(A.tensors[0].data,(0,2,1)))
+            mps.tensors[index+1].modify(data=A.tensors[1].data)
+
+            # Update the cache for all images (for all? really?)
+            for i,cache in enumerate(img_cache):
+                if going_right:
+                    # updating left
+                    img_cache[i][0][index+1] = mps[index]@cache[0][index]@_imgs[i][index]
+                else:
+                    # updating right
+                    img_cache[i][1][index] = mps[index+1]@cache[1][index+1]@_imgs[i][index+1]
+            #p0 = computepsi(mps,imgs[0])**2
+            progress.set_description('Left Index: {}'.format(index))
+
+            if index == len(mps.tensors)-3:
+                going_right = False
+
+    # cha cha real smooth
+
 #   _  _    
 #  | || |   
 #  | || |_  
