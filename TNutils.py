@@ -692,6 +692,7 @@ def learning_step_cached(mps, index, _imgs, lr, img_cache, going_right = True):
     # Computing the second term, summation over
     # the data-dependent terms
     psifrac = 0
+    
     for _img,cacha in zip(_imgs,img_cache):
         L, R = cacha
         left = tneinsum(L[index],_img[index])
@@ -724,9 +725,15 @@ def learning_step_cached(mps, index, _imgs, lr, img_cache, going_right = True):
         # FYI: split method does apply SVD by default
         # there are variations of svd that can be inspected
         # for a performance boost
-        SD = A.split(['i'+str(index-1),'v'+str(index)], absorb='right')
+        if index == 0:
+            SD = A.split(['v'+str(index)], absorb='right')
+        else:
+            SD = A.split(['i'+str(index-1),'v'+str(index)], absorb='right')
     else:
-        SD = A.split(['i'+str(index-1),'v'+str(index)], absorb='left')
+        if index == 0:
+            SD = A.split(['v'+str(index)], absorb='left')
+        else:
+            SD = A.split(['i'+str(index-1),'v'+str(index)], absorb='left')
 
     # SD.tensors[0] -> I_{index}
     # SD.tensors[1] -> I_{index+1}
@@ -742,15 +749,19 @@ def learning_epoch_cached(mps, _imgs, epochs, lr,img_cache):
         print('NLL: {} | Baseline: {}'.format(computeNLL_cached(mps, _imgs, img_cache), np.log(len(_imgs)) ) )
         print(f'epoch {epoch+1}/{epochs}')
         # [1,2,...,780,781,780,...,2,1]
-        progress = tq.tqdm([i for i in range(1,len(mps.tensors)-2)] + [i for i in range(len(mps.tensors)-3,0,-1)], leave=True)
-
+        progress = tq.tqdm([i for i in range(0,len(mps.tensors)-1)] + [i for i in range(len(mps.tensors)-3,0,-1)], leave=True)
+        #progress = tq.tqdm([i for i in range(1,len(mps.tensors)-2)] + [i for i in range(len(mps.tensors)-3,0,-1)], leave=True)
         # Firstly we slide right
         going_right = True
         for index in progress:
             A = learning_step_cached(mps,index,_imgs,lr,img_cache,going_right)
-
-            mps.tensors[index].modify(data=np.transpose(A.tensors[0].data,(0,2,1)))
-            mps.tensors[index+1].modify(data=A.tensors[1].data)
+            
+            if index == 0:
+                mps.tensors[index].modify(data=np.transpose(A.tensors[0].data,(1,0)))
+                mps.tensors[index+1].modify(data=A.tensors[1].data)
+            else:
+                mps.tensors[index].modify(data=np.transpose(A.tensors[0].data,(0,2,1)))
+                mps.tensors[index+1].modify(data=A.tensors[1].data)
 
             # Update the cache for all images (for all? really?)
             for i,cache in enumerate(img_cache):
@@ -765,7 +776,7 @@ def learning_epoch_cached(mps, _imgs, epochs, lr,img_cache):
             #p0 = computepsi(mps,imgs[0])**2
             progress.set_description('Left Index: {}'.format(index))
 
-            if index == len(mps.tensors)-3:
+            if index == len(mps.tensors)-2:
                 going_right = False
     
     print('NLL: {} | Baseline: {}'.format(computeNLL_cached(mps, _imgs, img_cache), np.log(len(_imgs)) ) )
