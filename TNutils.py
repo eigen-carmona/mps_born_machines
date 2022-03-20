@@ -297,14 +297,14 @@ def tens_picture(picture):
     tens = [qtn.Tensor(stater(n),inds=(f'v{i}',)) for i, n in enumerate(picture)]
     return tens
 
-def left_right_cache(_imgs):
+def left_right_cache(mps,_imgs):
     # Cache
     # For each image, we compute the left vector for each site, (?) as well as the right vector(?)
     # update it each time a site is updated
     img_cache = []
     for img in _imgs:
-        # Instead of contracting, just take mps[0][:,0] or mps[0][:,1]
-        curr_l = qtn.Tensor()#mps[0]@img[0]
+        # TODO: Instead of contracting, just take mps[0][:,0] or mps[0][:,1]
+        curr_l = qtn.Tensor()
         curr_r = qtn.Tensor()
         left_cache = [curr_l]
         right_cache = [curr_r]
