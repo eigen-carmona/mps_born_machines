@@ -4,6 +4,7 @@
 
 # Arrays
 import numpy as np
+import cytoolz
 
 # Deep Learning stuff
 import torch
@@ -26,6 +27,10 @@ from collections import deque
 import cProfile, pstats, io
 from pstats import SortKey
 
+import functools
+import collections
+import opt_einsum as oe
+import itertools
 #######################################################
 
 '''
@@ -183,7 +188,49 @@ def partial_removal_img(mnistimg, fraction = .5, axis = 0):
 #    __) |  
 #   / __/ _ 
 #  |_____(_) MPS GENERAL
-#######################################################          
+#######################################################
+
+@functools.lru_cache(2**12)
+def _inds_to_eq(inputs, output):
+    """
+    Conert indexes to the equation of contractions for np.einsum function
+    """
+    symbol_get = collections.defaultdict(map(oe.get_symbol, itertools.count()).__next__).__getitem__
+    in_str = ("".join(map(symbol_get, inds)) for inds in inputs)
+    out_str = "".join(map(symbol_get, output))
+    return ",".join(in_str) + f"->{out_str}"
+
+def tneinsum(tn1,tn2):
+    '''
+    Contract tn1 with tn2
+    It is an automated function that automatically contracts the bonds with
+    the same indexes.
+    For simple contractions this function is faster than tensor_contract
+    or @
+    '''
+    inds_i = tuple([tn1.inds, tn2.inds])
+    inds_out = tuple(qtn.tensor_core._gen_output_inds(cytoolz.concat(inds_i)))
+    eq = qtn.tensor_core._inds_to_eq(inds_i, inds_out)
+    
+    data = np.einsum(eq,tn1.data,tn2.data)
+    
+    return qtn.Tensor(data=data, inds=inds_out)
+
+def tneinsum2(tn1,tn2):
+    '''
+    Contract tn1 with tn2
+    It is an automated function that automatically contracts the bonds with
+    the same indexes.
+    For simple contractions this function is faster than tensor_contract
+    or @
+    '''
+    inds_i = tuple([tn1.inds, tn2.inds])
+    inds_out = tuple(qtn.tensor_core._gen_output_inds(cytoolz.concat(inds_i)))
+    eq = _inds_to_eq(inds_i, inds_out)
+    
+    data = np.einsum(eq,tn1.data,tn2.data)
+    
+    return qtn.Tensor(data=data, inds=inds_out)
 
 def initialize_mps(Ldim = 28*28, bdim = 30, canonicalize = 1):
     '''
@@ -441,6 +488,76 @@ def learning_step(mps, index, imgs, lr, going_right = True):
     
     # Assumption: The mps is canonized
     Z = A@A
+    
+    # Computing the second term, summation over
+    # the data-dependent terms
+    psifrac = 0
+    for img in imgs:
+        num = computepsiprime(mps,img,index)    # PSI'(v)
+        # 'ijkl,ilkj' or 'ijkl,ijkl'?
+        # computepsiprime was coded so that the ordering of the indexes is the same
+        # as the contraction A = mps.tensors[index] @ mps.tensors[index+1]
+        # so it should be the second one    
+        den = np.einsum('ijkl,ijkl',A.data,num) # PSI(v)
+        
+        # Theoretically the two computations above can be optimized in a single function
+        # because we are contracting the very same tensors for the most part
+        
+        psifrac = psifrac + num/den
+    
+    psifrac = psifrac/imgs.shape[0]
+    
+    # Derivative of the NLL
+    dNLL = (A/Z) - psifrac
+    
+    A = A + lr*dNLL # Update A_{i,i+1}
+    
+    # Now the tensor A_{i,i+1} must be split in I_k and I_{k+1}.
+    # To preserve canonicalization:
+    # > if we are merging sliding towards the RIGHT we need to absorb right
+    #                                           S  v  D
+    #     ->-->--A_{k,k+1}--<--<-   =>   ->-->-->--x--<--<--<-   =>    >-->-->--o--<--<-  
+    #      |  |    |   |    |  |          |  |  |   |    |  |          |  |  |  |  |  |
+    #
+    # > if we are merging sliding toward the LEFT we need to absorb left
+    #
+    if going_right:
+        # FYI: split method does apply SVD by default
+        # there are variations of svd that can be inspected 
+        # for a performance boost
+        SD = A.split(['i'+str(index-1),'v'+str(index)], absorb='right')
+    else:
+        SD = A.split(['i'+str(index-1),'v'+str(index)], absorb='left')
+       
+    # SD.tensors[0] -> I_{index}
+    # SD.tensors[1] -> I_{index+1}
+    return SD
+
+def learning_step_numpy(mps, index, imgs, lr, going_right = True):
+    '''
+    DOES NOT WORK
+    
+    Compute the updated merged tensor A_{index,index+1}
+    
+      UPDATE RULE:  A_{i,i+1} += lr* 2 *( A_{i,i+1}/Z - ( SUM_{i=1}^{m} psi'(v)/psi(v) )/m )
+      
+    '''
+    
+    # Merge I_k and I_{k+1} in a single rank 4 tensor ('i_{k-1}', 'v_k', 'i_{k+1}', 'v_{k+1}')
+    # OLD: A = (mps.tensors[index] @ mps.tensors[index+1])
+    # '@' may be too slow
+    if index == 0:
+        A = np.einsum('ij,iab->jab',mps.tensors[index].data,mps.tensors[index+1].data)
+        # Assumption: The mps is canonized
+        Z = np.einsum('jab,jab',A,A)
+    elif index == (len(mps.tensors)-2):
+        A = np.einsum('ijk,ja->ika',mps.tensors[index].data,mps.tensors[index+1].data)
+        # Assumption: The mps is canonized
+        Z = np.einsum('ika,ika',A,A)
+    else:
+        A = np.einsum('ijk,jab->ikab',mps.tensors[index].data,mps.tensors[index+1].data)
+        # Assumption: The mps is canonized
+        Z = np.einsum('ikab,ikab',A,A)
     
     # Computing the second term, summation over
     # the data-dependent terms
