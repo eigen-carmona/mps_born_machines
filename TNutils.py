@@ -250,6 +250,29 @@ def tens_picture(picture):
     tens = [qtn.Tensor(stater(n),inds=(f'v{i}',)) for i, n in enumerate(picture)]
     return tens
 
+def left_right_cache(_imgs):
+    # Cache
+    # For each image, we compute the left vector for each site, (?) as well as the right vector(?)
+    # update it each time a site is updated
+    img_cache = []
+    for img in _imgs:
+        # Instead of contracting, just take mps[0][:,0] or mps[0][:,1]
+        curr_l = qtn.Tensor()#mps[0]@img[0]
+        curr_r = qtn.Tensor()
+        left_cache = [curr_l]
+        right_cache = [curr_r]
+        for site in range(len(img)-1):
+            contr_l = mps[site]@curr_l
+            curr_l = contr_l@img[site]
+            left_cache.append(curr_l)
+            contr_r = mps[-(site+1)]@curr_r
+            curr_r = contr_r@img[-(site+1)]
+            right_cache.append(curr_r)
+        # reversing the right cache for site indexing consistency
+        right_cache.reverse()
+        img_cache.append((left_cache,right_cache))
+    return img_cache
+
 def computepsi(mps, img):
     '''
     Contract the MPS with the states (pixels) of a binary{0,1} image
