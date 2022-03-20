@@ -491,6 +491,23 @@ def computeNLL(mps, imgs):
         
     return - 2 * lnsum / imgs.shape[0]
 
+def computeNLL_cached(mps, _imgs, img_cache):
+    
+    index = 100
+    A = qtn.tensor_contract(mps[index],mps[index+1])
+    Z = qtn.tensor_contract(A,A)
+
+    logpsi = 0
+    for _img,cacha in zip(_imgs,img_cache):
+        L, R = cacha
+        left = tneinsum(L[index],_img[index])
+        right = tneinsum(R[index+1],_img[index+1])
+        psiprime = tneinsum(left,right)
+        logpsi = logpsi + np.log(np.abs(qtn.tensor_contract(psiprime,A)))
+        
+        
+    return - (2/len(_imgs)) * logpsi
+
 #   _____  
 #  |___ /  
 #    |_ \  
@@ -722,6 +739,7 @@ def learning_epoch_cached(mps, _imgs, epochs, lr,img_cache):
     At tensor max-2, apply learning_step() sliding to the left back to tensor 1
     '''
     for epoch in range(epochs):
+        print('NLL: {} | Baseline: {}'.format(computeNLL_cached(mps, _imgs, img_cache), np.log(len(_imgs)) ) )
         print(f'epoch {epoch+1}/{epochs}')
         # [1,2,...,780,781,780,...,2,1]
         progress = tq.tqdm([i for i in range(1,len(mps.tensors)-2)] + [i for i in range(len(mps.tensors)-3,0,-1)], leave=True)
@@ -749,7 +767,8 @@ def learning_epoch_cached(mps, _imgs, epochs, lr,img_cache):
 
             if index == len(mps.tensors)-3:
                 going_right = False
-
+    
+    print('NLL: {} | Baseline: {}'.format(computeNLL_cached(mps, _imgs, img_cache), np.log(len(_imgs)) ) )
     # cha cha real smooth
 
 #   _  _    
@@ -761,7 +780,7 @@ def learning_epoch_cached(mps, _imgs, epochs, lr,img_cache):
 
 def generate_sample(mps):
     
-    mps = mps / mps.norm()
+    mps.normalize()
     
     # It is clear that this can be easily performed if we 
     # have gauged all the tensors except A_N to be left canonical 
