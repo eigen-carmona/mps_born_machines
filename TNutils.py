@@ -13,6 +13,9 @@ import torchvision.transforms as transforms
 
 # Images display and plots
 import matplotlib.pyplot as plt
+from matplotlib.colors import LinearSegmentedColormap
+from matplotlib.colors import ListedColormap
+import matplotlib.pylab as pl
 
 # Fancy progress bars
 import tqdm.notebook as tq
@@ -31,6 +34,7 @@ import functools
 import collections
 import opt_einsum as oe
 import itertools
+import copy
 #######################################################
 
 '''
@@ -182,6 +186,42 @@ def partial_removal_img(mnistimg, fraction = .5, axis = 0):
     mnistimg_corr = np.reshape(mnistimg_corr, (784,))
     
     return mnistimg_corr
+
+def plot_rec(cor_flat, rec_flat, savefig = ''):
+    '''
+    Display the RECONSTRUCTION
+    '''
+    
+    # PREPARING CMAPS
+    greycmap = pl.cm.Greys
+
+    # Get the colormap colors
+    corrupted_cmap = greycmap(np.arange(greycmap.N))
+
+    # Set alpha
+    corrupted_cmap[:,-1] = np.linspace(0, 1, greycmap.N)
+
+    # Create new colormap
+    corrupted_cmap = ListedColormap(corrupted_cmap)
+    
+    reccolors = [(1, 0, 0), (1, 1, 1)]
+    reccmap = LinearSegmentedColormap.from_list('rec', reccolors, N=2)
+    
+    # If the image is corrupted for partial reconstruction (pixels are set to -1)
+    cor_flat = np.copy(cor_flat)
+    cor_flat[cor_flat == -1] = 0
+    plt.figure(figsize = (2,2))
+    plt.imshow(1-np.reshape(rec_flat,(28,28)), cmap=reccmap)
+    plt.imshow(np.reshape(cor_flat,(28,28)), cmap=corrupted_cmap)
+        
+    plt.axis('off')
+    
+    if savefig != '':
+        # save the picture as svg in the location determined by savefig
+        plt.savefig(savefig, format='svg')
+    
+    plt.show()
+        
 
 #   ____    
 #  |___ \   
@@ -904,3 +944,59 @@ def generate_sample(mps):
         generated.appendleft(1)
         
     return generated
+
+def reconstruct_SLOW(mps, corr_img):
+    # Copy and normalize psi
+    rec_mps = copy.copy(mps)
+    rec_mps.normalize()
+    
+    # Contracting know pixels
+    for site, pixel in enumerate(corr_img):
+        if pixel == 0:
+            if site == 0 or site == len(rec_mps.tensors) - 1:
+                data = np.einsum('ab,b',rec_mps[site].data, [0,1] )
+                inds = tuple(list(mps.tensors[site].inds)[:-1])
+                rec_mps.tensors[site].modify(data=data, inds = inds)
+            else:
+                data = np.einsum('abc,c',rec_mps[site].data, [0,1] )
+                inds = tuple(list(mps.tensors[site].inds)[:-1])
+                rec_mps.tensors[site].modify(data=data, inds = inds)
+        elif pixel == 1:
+            if site == 0 or site == len(rec_mps.tensors) - 1:
+                data = np.einsum('ab,b',rec_mps[site].data, [1,0] )
+                inds = tuple(list(mps.tensors[site].inds)[:-1])
+                rec_mps.tensors[site].modify(data=data, inds = inds)
+            else:
+                data = np.einsum('abc,c',rec_mps[site].data, [1,0] )
+                inds = tuple(list(mps.tensors[site].inds)[:-1])
+                rec_mps.tensors[site].modify(data=data, inds = inds)
+
+    reconstructed = copy.copy(corr_img)
+
+    for site, pixel in enumerate(corr_img):
+        if pixel == -1:
+            den = rec_mps @ rec_mps
+
+
+            temp_mps = copy.copy(rec_mps)
+            if site == 0 or site == len(rec_mps.tensors) - 1:
+                data = np.einsum('ab,b',temp_mps[site].data, [0,1] )
+                bdata = np.einsum('ab,b',temp_mps[site].data, [1,0] )
+            else:
+                data = np.einsum('abc,c',temp_mps[site].data, [0,1] )
+                bdata = np.einsum('abc,c',temp_mps[site].data, [1,0] )
+
+            inds = tuple(list(rec_mps.tensors[site].inds)[:-1])
+            temp_mps.tensors[site].modify(data=data, inds = inds)  
+
+            num = temp_mps @ temp_mps
+
+            p = num/den
+            if np.random.rand() < p:
+                rec_mps = temp_mps
+                reconstructed[site] = 0
+            else:
+                rec_mps[site].modify(data=bdata, inds=inds)
+                reconstructed[site] = 1
+                
+    return reconstructed
