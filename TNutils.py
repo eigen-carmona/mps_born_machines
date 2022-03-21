@@ -500,9 +500,9 @@ def computeNLL_cached(mps, _imgs, img_cache):
     logpsi = 0
     for _img,cacha in zip(_imgs,img_cache):
         L, R = cacha
-        left = tneinsum(L[index],_img[index])
-        right = tneinsum(R[index+1],_img[index+1])
-        psiprime = tneinsum(left,right)
+        left = tneinsum2(L[index],_img[index])
+        right = tneinsum2(R[index+1],_img[index+1])
+        psiprime = tneinsum2(left,right)
         logpsi = logpsi + np.log(np.abs(qtn.tensor_contract(psiprime,A)))
         
         
@@ -695,9 +695,9 @@ def learning_step_cached(mps, index, _imgs, lr, img_cache, going_right = True):
     
     for _img,cacha in zip(_imgs,img_cache):
         L, R = cacha
-        left = tneinsum(L[index],_img[index])
-        right = tneinsum(R[index+1],_img[index+1])
-        num = tneinsum(left,right)
+        left = tneinsum2(L[index],_img[index])
+        right = tneinsum2(R[index+1],_img[index+1])
+        num = tneinsum2(left,right)
         den = qtn.tensor_contract(num,A)
 
         # Theoretically the two computations above can be optimized in a single function
