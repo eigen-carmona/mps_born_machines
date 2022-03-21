@@ -4,6 +4,7 @@
 
 # Arrays
 import numpy as np
+import cytoolz
 
 # Deep Learning stuff
 import torch
@@ -26,6 +27,10 @@ from collections import deque
 import cProfile, pstats, io
 from pstats import SortKey
 
+import functools
+import collections
+import opt_einsum as oe
+import itertools
 #######################################################
 
 '''
@@ -183,7 +188,49 @@ def partial_removal_img(mnistimg, fraction = .5, axis = 0):
 #    __) |  
 #   / __/ _ 
 #  |_____(_) MPS GENERAL
-#######################################################          
+#######################################################
+
+@functools.lru_cache(2**12)
+def _inds_to_eq(inputs, output):
+    """
+    Conert indexes to the equation of contractions for np.einsum function
+    """
+    symbol_get = collections.defaultdict(map(oe.get_symbol, itertools.count()).__next__).__getitem__
+    in_str = ("".join(map(symbol_get, inds)) for inds in inputs)
+    out_str = "".join(map(symbol_get, output))
+    return ",".join(in_str) + f"->{out_str}"
+
+def tneinsum(tn1,tn2):
+    '''
+    Contract tn1 with tn2
+    It is an automated function that automatically contracts the bonds with
+    the same indexes.
+    For simple contractions this function is faster than tensor_contract
+    or @
+    '''
+    inds_i = tuple([tn1.inds, tn2.inds])
+    inds_out = tuple(qtn.tensor_core._gen_output_inds(cytoolz.concat(inds_i)))
+    eq = qtn.tensor_core._inds_to_eq(inds_i, inds_out)
+    
+    data = np.einsum(eq,tn1.data,tn2.data)
+    
+    return qtn.Tensor(data=data, inds=inds_out)
+
+def tneinsum2(tn1,tn2):
+    '''
+    Contract tn1 with tn2
+    It is an automated function that automatically contracts the bonds with
+    the same indexes.
+    For simple contractions this function is faster than tensor_contract
+    or @
+    '''
+    inds_i = tuple([tn1.inds, tn2.inds])
+    inds_out = tuple(qtn.tensor_core._gen_output_inds(cytoolz.concat(inds_i)))
+    eq = _inds_to_eq(inds_i, inds_out)
+    
+    data = np.einsum(eq,tn1.data,tn2.data)
+    
+    return qtn.Tensor(data=data, inds=inds_out)
 
 def initialize_mps(Ldim = 28*28, bdim = 30, canonicalize = 1):
     '''
@@ -243,6 +290,35 @@ def quimb_transform_img2state(img):
     # |  | 781 |
     # O  O ... O
     return img_TN
+
+stater = lambda x: [0,1] if x == 0 else [1,0]
+def tens_picture(picture):
+    '''Converts an array of bits into a list of tensors compatible with a tensor network.'''
+    tens = [qtn.Tensor(stater(n),inds=(f'v{i}',)) for i, n in enumerate(picture)]
+    return tens
+
+def left_right_cache(mps,_imgs):
+    # Cache
+    # For each image, we compute the left vector for each site, (?) as well as the right vector(?)
+    # update it each time a site is updated
+    img_cache = []
+    for img in _imgs:
+        # TODO: Instead of contracting, just take mps[0][:,0] or mps[0][:,1]
+        curr_l = qtn.Tensor()
+        curr_r = qtn.Tensor()
+        left_cache = [curr_l]
+        right_cache = [curr_r]
+        for site in range(len(img)-1):
+            contr_l = mps[site]@curr_l
+            curr_l = contr_l@img[site]
+            left_cache.append(curr_l)
+            contr_r = mps[-(site+1)]@curr_r
+            curr_r = contr_r@img[-(site+1)]
+            right_cache.append(curr_r)
+        # reversing the right cache for site indexing consistency
+        right_cache.reverse()
+        img_cache.append((left_cache,right_cache))
+    return img_cache
 
 def computepsi(mps, img):
     '''
@@ -383,6 +459,23 @@ def computepsiprime(mps, img, contracted_left_index):
     
     return contraction
 
+def psi_primed(mps,_img,index):
+    # quimby contraction. Currently not faster than einsum implementation
+    # Requires _img to be provided in a quimby friendly format
+    # Achievable with tens_picture
+    contr_L = qtn.Tensor() if index == 0 else mps[0]@_img[0]
+    for i in range(1,index,1):
+        # first, contr_Lact with the other matrix
+        contr_L = contr_L@mps[i]
+        # then, with the qubit
+        contr_L = contr_L@_img[i]
+    contr_R = qtn.Tensor() if index == len(_img)-1 else mps[-1]@_img[-1]
+    for i in range(len(_img)-2,index+1,-1):
+        contr_R = mps[i]@contr_R
+        contr_R = _img[i]@contr_R
+    psi_p = contr_L@_img[index]@_img[index+1]@contr_R
+    return psi_p
+
 def computeNLL(mps, imgs):
     '''
     Computes the Negative Log Likelihood of a Tensor Network (mps)
@@ -397,6 +490,23 @@ def computeNLL(mps, imgs):
         lnsum = lnsum + np.log( abs(computepsi(mps,img)) )
         
     return - 2 * lnsum / imgs.shape[0]
+
+def computeNLL_cached(mps, _imgs, img_cache):
+    
+    index = 100
+    A = qtn.tensor_contract(mps[index],mps[index+1])
+    Z = qtn.tensor_contract(A,A)
+
+    logpsi = 0
+    for _img,cacha in zip(_imgs,img_cache):
+        L, R = cacha
+        left = tneinsum(L[index],_img[index])
+        right = tneinsum(R[index+1],_img[index+1])
+        psiprime = tneinsum(left,right)
+        logpsi = logpsi + np.log(np.abs(qtn.tensor_contract(psiprime,A)))
+        
+        
+    return - (2/len(_imgs)) * logpsi
 
 #   _____  
 #  |___ /  
@@ -423,8 +533,82 @@ def learning_step(mps, index, imgs, lr, going_right = True):
     # the data-dependent terms
     psifrac = 0
     for img in imgs:
-        num = computepsiprime(mps,img,index)  # PSI(v)
-        den = computepsi(mps,img)             # PSI(v')
+        num = computepsiprime(mps,img,index)    # PSI'(v)
+        # 'ijkl,ilkj' or 'ijkl,ijkl'?
+        # computepsiprime was coded so that the ordering of the indexes is the same
+        # as the contraction A = mps.tensors[index] @ mps.tensors[index+1]
+        # so it should be the second one    
+        den = np.einsum('ijkl,ijkl',A.data,num) # PSI(v)
+        
+        # Theoretically the two computations above can be optimized in a single function
+        # because we are contracting the very same tensors for the most part
+        
+        psifrac = psifrac + num/den
+    
+    psifrac = psifrac/imgs.shape[0]
+    
+    # Derivative of the NLL
+    dNLL = (A/Z) - psifrac
+    
+    A = A + lr*dNLL # Update A_{i,i+1}
+    
+    # Now the tensor A_{i,i+1} must be split in I_k and I_{k+1}.
+    # To preserve canonicalization:
+    # > if we are merging sliding towards the RIGHT we need to absorb right
+    #                                           S  v  D
+    #     ->-->--A_{k,k+1}--<--<-   =>   ->-->-->--x--<--<--<-   =>    >-->-->--o--<--<-  
+    #      |  |    |   |    |  |          |  |  |   |    |  |          |  |  |  |  |  |
+    #
+    # > if we are merging sliding toward the LEFT we need to absorb left
+    #
+    if going_right:
+        # FYI: split method does apply SVD by default
+        # there are variations of svd that can be inspected 
+        # for a performance boost
+        SD = A.split(['i'+str(index-1),'v'+str(index)], absorb='right')
+    else:
+        SD = A.split(['i'+str(index-1),'v'+str(index)], absorb='left')
+       
+    # SD.tensors[0] -> I_{index}
+    # SD.tensors[1] -> I_{index+1}
+    return SD
+
+def learning_step_numpy(mps, index, imgs, lr, going_right = True):
+    '''
+    DOES NOT WORK
+    
+    Compute the updated merged tensor A_{index,index+1}
+    
+      UPDATE RULE:  A_{i,i+1} += lr* 2 *( A_{i,i+1}/Z - ( SUM_{i=1}^{m} psi'(v)/psi(v) )/m )
+      
+    '''
+    
+    # Merge I_k and I_{k+1} in a single rank 4 tensor ('i_{k-1}', 'v_k', 'i_{k+1}', 'v_{k+1}')
+    # OLD: A = (mps.tensors[index] @ mps.tensors[index+1])
+    # '@' may be too slow
+    if index == 0:
+        A = np.einsum('ij,iab->jab',mps.tensors[index].data,mps.tensors[index+1].data)
+        # Assumption: The mps is canonized
+        Z = np.einsum('jab,jab',A,A)
+    elif index == (len(mps.tensors)-2):
+        A = np.einsum('ijk,ja->ika',mps.tensors[index].data,mps.tensors[index+1].data)
+        # Assumption: The mps is canonized
+        Z = np.einsum('ika,ika',A,A)
+    else:
+        A = np.einsum('ijk,jab->ikab',mps.tensors[index].data,mps.tensors[index+1].data)
+        # Assumption: The mps is canonized
+        Z = np.einsum('ikab,ikab',A,A)
+    
+    # Computing the second term, summation over
+    # the data-dependent terms
+    psifrac = 0
+    for img in imgs:
+        num = computepsiprime(mps,img,index)    # PSI'(v)
+        # 'ijkl,ilkj' or 'ijkl,ijkl'?
+        # computepsiprime was coded so that the ordering of the indexes is the same
+        # as the contraction A = mps.tensors[index] @ mps.tensors[index+1]
+        # so it should be the second one    
+        den = np.einsum('ijkl,ijkl',A.data,num) # PSI(v)
         
         # Theoretically the two computations above can be optimized in a single function
         # because we are contracting the very same tensors for the most part
@@ -465,32 +649,139 @@ def learning_epoch_sgd(mps, imgs, epochs, lr, batch_size = 25):
     From tensor 1 (the second), apply learning_step() sliding to the right
     At tensor max-2, apply learning_step() sliding to the left back to tensor 1
     '''
-    
+
     # We expect, however, that the batch size is smaler than the input set
     batch_size = min(len(imgs),batch_size)
     guide = np.arange(len(imgs))
-    
+
+    # TODO: shouldn't we also consider 0 and 782 here?
+    # psi_primed is compatible with this
+    # however, computepsiprime only works with:
     # [1,2,...,780,781,780,...,2,1]
     progress = tq.tqdm([i for i in range(1,len(mps.tensors)-2)] + [i for i in range(len(mps.tensors)-3,0,-1)], leave=True)
-        
+
     # Firstly we slide right
     going_right = True
     for index in progress:
         np.random.shuffle(guide)
         mask = guide[:batch_size]
         A = learning_step(mps,index,imgs[mask],lr, going_right)
-        
+
         mps.tensors[index].modify(data=np.transpose(A.tensors[0].data,(0,2,1)))
         mps.tensors[index+1].modify(data=A.tensors[1].data)
 
         #p0 = computepsi(mps,imgs[0])**2
         progress.set_description('Left Index: {}'.format(index))
-        
-        if index == len(mps.tensors)-3 :
+
+        if index == len(mps.tensors)-3:
             going_right = False
-            
+
     # cha cha real smooth
+
+def learning_step_cached(mps, index, _imgs, lr, img_cache, going_right = True):
+    '''
+    Compute the updated merged tensor A_{index,index+1}
     
+      UPDATE RULE:  A_{i,i+1} += lr* 2 *( A_{i,i+1}/Z - ( SUM_{i=1}^{m} psi'(v)/psi(v) )/m )
+    '''
+
+    # Merge I_k and I_{k+1} in a single rank 4 tensor ('i_{k-1}', 'v_k', 'i_{k+1}', 'v_{k+1}')
+    A = qtn.tensor_contract(mps[index],mps[index+1])
+    Z = qtn.tensor_contract(A,A)
+
+    # Computing the second term, summation over
+    # the data-dependent terms
+    psifrac = 0
+    
+    for _img,cacha in zip(_imgs,img_cache):
+        L, R = cacha
+        left = tneinsum(L[index],_img[index])
+        right = tneinsum(R[index+1],_img[index+1])
+        num = tneinsum(left,right)
+        den = qtn.tensor_contract(num,A)
+
+        # Theoretically the two computations above can be optimized in a single function
+        # because we are contracting the very same tensors for the most part
+
+        psifrac = psifrac + num/den
+
+    psifrac = psifrac/len(_imgs)
+
+    # Derivative of the NLL
+    dNLL = (A/Z) - psifrac
+
+    A = A + lr*dNLL # Update A_{i,i+1}
+
+    # Now the tensor A_{i,i+1} must be split in I_k and I_{k+1}.
+    # To preserve canonicalization:
+    # > if we are merging sliding towards the RIGHT we need to absorb right
+    #                                           S  v  D
+    #     ->-->--A_{k,k+1}--<--<-   =>   ->-->-->--x--<--<--<-   =>    >-->-->--o--<--<-
+    #      |  |    |   |    |  |          |  |  |   |    |  |          |  |  |  |  |  |
+    #
+    # > if we are merging sliding toward the LEFT we need to absorb left
+    #
+    if going_right:
+        # FYI: split method does apply SVD by default
+        # there are variations of svd that can be inspected
+        # for a performance boost
+        if index == 0:
+            SD = A.split(['v'+str(index)], absorb='right')
+        else:
+            SD = A.split(['i'+str(index-1),'v'+str(index)], absorb='right')
+    else:
+        if index == 0:
+            SD = A.split(['v'+str(index)], absorb='left')
+        else:
+            SD = A.split(['i'+str(index-1),'v'+str(index)], absorb='left')
+
+    # SD.tensors[0] -> I_{index}
+    # SD.tensors[1] -> I_{index+1}
+    return SD
+
+def learning_epoch_cached(mps, _imgs, epochs, lr,img_cache):
+    '''
+    Manages the sliding left and right.
+    From tensor 1 (the second), apply learning_step() sliding to the right
+    At tensor max-2, apply learning_step() sliding to the left back to tensor 1
+    '''
+    for epoch in range(epochs):
+        print('NLL: {} | Baseline: {}'.format(computeNLL_cached(mps, _imgs, img_cache), np.log(len(_imgs)) ) )
+        print(f'epoch {epoch+1}/{epochs}')
+        # [1,2,...,780,781,780,...,2,1]
+        progress = tq.tqdm([i for i in range(0,len(mps.tensors)-1)] + [i for i in range(len(mps.tensors)-3,0,-1)], leave=True)
+        #progress = tq.tqdm([i for i in range(1,len(mps.tensors)-2)] + [i for i in range(len(mps.tensors)-3,0,-1)], leave=True)
+        # Firstly we slide right
+        going_right = True
+        for index in progress:
+            A = learning_step_cached(mps,index,_imgs,lr,img_cache,going_right)
+            
+            if index == 0:
+                mps.tensors[index].modify(data=np.transpose(A.tensors[0].data,(1,0)))
+                mps.tensors[index+1].modify(data=A.tensors[1].data)
+            else:
+                mps.tensors[index].modify(data=np.transpose(A.tensors[0].data,(0,2,1)))
+                mps.tensors[index+1].modify(data=A.tensors[1].data)
+
+            # Update the cache for all images (for all? really?)
+            for i,cache in enumerate(img_cache):
+                if going_right:
+                    # updating left
+                    left = tneinsum2(mps[index],cache[0][index])
+                    img_cache[i][0][index+1] = tneinsum2(left,_imgs[i][index])
+                else:
+                    # updating right
+                    right = tneinsum2(mps[index+1],cache[1][index+1])
+                    img_cache[i][1][index] = tneinsum2(right,_imgs[i][index+1])
+            #p0 = computepsi(mps,imgs[0])**2
+            progress.set_description('Left Index: {}'.format(index))
+
+            if index == len(mps.tensors)-2:
+                going_right = False
+    
+    print('NLL: {} | Baseline: {}'.format(computeNLL_cached(mps, _imgs, img_cache), np.log(len(_imgs)) ) )
+    # cha cha real smooth
+
 #   _  _    
 #  | || |   
 #  | || |_  
@@ -544,7 +835,7 @@ def generate_sample(mps):
        .
     '''
     
-    mps = mps / mps.norm()
+    mps.normalize()
     
     # Canonicalize left
     # We use the property of canonicalization to easily write
