@@ -678,7 +678,7 @@ def learning_epoch_sgd(mps, imgs, epochs, lr, batch_size = 25):
 
     # cha cha real smooth
 
-def learning_step_cached(mps, index, _imgs, lr, img_cache, going_right = True):
+def learning_step_cached(mps, index, _imgs, lr, img_cache, going_right = True, **kwargs):
     '''
     Compute the updated merged tensor A_{index,index+1}
     
@@ -754,8 +754,7 @@ def learning_epoch_cached(mps, _imgs, epochs, lr,img_cache):
         # Firstly we slide right
         going_right = True
         for index in progress:
-            A = learning_step_cached(mps,index,_imgs,lr,img_cache,going_right)
-            
+            A = learning_step_cached(mps,index,_imgs,lr,img_cache,going_right,**kwargs)
             if index == 0:
                 mps.tensors[index].modify(data=np.transpose(A.tensors[0].data,(1,0)))
                 mps.tensors[index+1].modify(data=A.tensors[1].data)
