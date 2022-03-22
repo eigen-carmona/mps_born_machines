@@ -829,7 +829,7 @@ def learning_epoch_cached(mps, _imgs, epochs, lr,img_cache):
 #     |_|(_) GENERATION
 #######################################################            
 
-def generate_sample(mps):
+def generate_sample(mps, reconstruct = False):
     '''
     Generate a sample from an MPS.
     0. normalize the mps (probabilities need to be computed)
@@ -875,14 +875,16 @@ def generate_sample(mps):
        .
     '''
     
-    mps.normalize()
+    
     
     # Canonicalize left
     # We use the property of canonicalization to easily write
     # conditional probabilities
     # By left canonicalizing we will sample from right (784th pixel)
     # to left (1st pixel)
-    mps.left_canonize()
+    if not reconstruct:
+        mps.normalize()
+        mps.left_canonize()
     
     # First pixel
     #   +----In    +
@@ -1000,4 +1002,87 @@ def reconstruct_SLOW(mps, corr_img):
                 reconstructed[site] = 1
                 
     return reconstructed
+
+def reconstruct(mps, corr_img):
+    
+    # Copy the tensor, we need to perform vertical
+    # contractions among all know pixels
+    rec_mps = copy.copy(mps)
+    rec_mps.normalize()
+    
+    # Contracting know pixels
+    for site, pixel in enumerate(corr_img):
+        if pixel == 0:
+            if site == 0 or site == len(rec_mps.tensors) - 1:
+                data = np.einsum('ab,b',rec_mps[site].data, [0,1] )
+                inds = tuple(list(mps.tensors[site].inds)[:-1])
+                rec_mps.tensors[site].modify(data=data, inds = inds)
+            else:
+                data = np.einsum('abc,c',rec_mps[site].data, [0,1] )
+                inds = tuple(list(mps.tensors[site].inds)[:-1])
+                rec_mps.tensors[site].modify(data=data, inds = inds)
+        elif pixel == 1:
+            if site == 0 or site == len(rec_mps.tensors) - 1:
+                data = np.einsum('ab,b',rec_mps[site].data, [1,0] )
+                inds = tuple(list(mps.tensors[site].inds)[:-1])
+                rec_mps.tensors[site].modify(data=data, inds = inds)
+            else:
+                data = np.einsum('abc,c',rec_mps[site].data, [1,0] )
+                inds = tuple(list(mps.tensors[site].inds)[:-1])
+                rec_mps.tensors[site].modify(data=data, inds = inds)
+                
+    first = False # check if we already found an unknown pixel
+    upixel = -1
+    for site in range(len(rec_mps.tensors)):
+        if site == 0:
+            ut = rec_mps.tensors[site]
+            if 'v0' in rec_mps.tensors[site].inds: # 0 is unknown
+                ut = tneinsum2(ut,rec_mps.tensors[site+1])
+            else:
+                ut = tneinsum2(ut, rec_mps.tensors[site+1])
+        else:
+            if 'v'+str(site) in rec_mps.tensors[site].inds:
+                upixel = upixel + 1
+                ut.modify(tags='U'+str(upixel))
+                if not first:
+                    utn = qtn.Tensor(ut)
+                else:
+                    utn = utn & ut
+                first = True
+                if site < len(rec_mps.tensors) - 1:
+                    ut = rec_mps.tensors[site+1]
+
+            else:
+                ut = tneinsum(ut, rec_mps.tensors[site+1])
+                if site == len(rec_mps.tensors) - 1:
+                    utn = utn @ ut
+    
+    utn = qtn.tensor_1d.TensorNetwork1DFlat(utn.tensors)
+    
+    # In order to left canonize i need a class that is a 
+    # TensorNetwork1DFlat or MatrixProductState, but
+    # I did not manage to transform utn in a MatrixProductState
+    
+    # The following attributes are needed for normalizing and leftcanonizing
+    utn.cyclic = rec_mps.cyclic
+    utn._L = len(utn.tensors)
+    utn._site_tag_id = 'U{}'
+    
+    # Normalization
+    utn = utn / np.sqrt(utn @ utn)
+    
+    # After normalization some properties disappear somehow
+    utn.cyclic = rec_mps.cyclic
+    utn._L = len(utn.tensors)
+    utn._site_tag_id = 'U{}'
+    
+    utn.left_canonize()
+    
+    # Generate from the unknown pixels network
+    reconstruction = generate_sample(utn, reconstruct = True)
+    
+    rec_img = copy.copy(corr_img)
+    rec_img[rec_img == -1] = reconstruction
+    
+    return rec_img
     
