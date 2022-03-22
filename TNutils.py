@@ -491,9 +491,8 @@ def computeNLL(mps, imgs):
         
     return - 2 * lnsum / imgs.shape[0]
 
-def computeNLL_cached(mps, _imgs, img_cache):
-    
-    index = 100
+def computeNLL_cached(mps, _imgs, img_cache, index):
+
     A = qtn.tensor_contract(mps[index],mps[index+1])
     Z = qtn.tensor_contract(A,A)
 
@@ -504,8 +503,8 @@ def computeNLL_cached(mps, _imgs, img_cache):
         right = tneinsum2(R[index+1],_img[index+1])
         psiprime = tneinsum2(left,right)
         logpsi = logpsi + np.log(np.abs(qtn.tensor_contract(psiprime,A)))
-        
-        
+
+
     return - (2/len(_imgs)) * logpsi
 
 #   _____  
@@ -726,27 +725,27 @@ def learning_step_cached(mps, index, _imgs, lr, img_cache, going_right = True, *
         # there are variations of svd that can be inspected
         # for a performance boost
         if index == 0:
-            SD = A.split(['v'+str(index)], absorb='right')
+            SD = A.split(['v'+str(index)], absorb='right', **kwargs)
         else:
-            SD = A.split(['i'+str(index-1),'v'+str(index)], absorb='right')
+            SD = A.split(['i'+str(index-1),'v'+str(index)], absorb='right',**kwargs)
     else:
         if index == 0:
-            SD = A.split(['v'+str(index)], absorb='left')
+            SD = A.split(['v'+str(index)], absorb='left', **kwargs)
         else:
-            SD = A.split(['i'+str(index-1),'v'+str(index)], absorb='left')
+            SD = A.split(['i'+str(index-1),'v'+str(index)], absorb='left',**kwargs)
 
     # SD.tensors[0] -> I_{index}
     # SD.tensors[1] -> I_{index+1}
     return SD
 
-def learning_epoch_cached(mps, _imgs, epochs, lr,img_cache):
+def learning_epoch_cached(mps, _imgs, epochs, lr,img_cache,**kwargs):
     '''
     Manages the sliding left and right.
     From tensor 1 (the second), apply learning_step() sliding to the right
     At tensor max-2, apply learning_step() sliding to the left back to tensor 1
     '''
     for epoch in range(epochs):
-        print('NLL: {} | Baseline: {}'.format(computeNLL_cached(mps, _imgs, img_cache), np.log(len(_imgs)) ) )
+        print('NLL: {} | Baseline: {}'.format(computeNLL_cached(mps, _imgs, img_cache, 0), np.log(len(_imgs)) ) )
         print(f'epoch {epoch+1}/{epochs}')
         # [1,2,...,780,781,780,...,2,1]
         progress = tq.tqdm([i for i in range(0,len(mps.tensors)-1)] + [i for i in range(len(mps.tensors)-3,0,-1)], leave=True)
@@ -778,7 +777,7 @@ def learning_epoch_cached(mps, _imgs, epochs, lr,img_cache):
             if index == len(mps.tensors)-2:
                 going_right = False
     
-    print('NLL: {} | Baseline: {}'.format(computeNLL_cached(mps, _imgs, img_cache), np.log(len(_imgs)) ) )
+    print('NLL: {} | Baseline: {}'.format(computeNLL_cached(mps, _imgs, img_cache,0), np.log(len(_imgs)) ) )
     # cha cha real smooth
 
 #   _  _    
