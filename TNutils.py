@@ -13,6 +13,9 @@ import torchvision.transforms as transforms
 
 # Images display and plots
 import matplotlib.pyplot as plt
+from matplotlib.colors import LinearSegmentedColormap
+from matplotlib.colors import ListedColormap
+import matplotlib.pylab as pl
 
 # Fancy progress bars
 import tqdm.notebook as tq
@@ -31,6 +34,7 @@ import functools
 import collections
 import opt_einsum as oe
 import itertools
+import copy
 #######################################################
 
 '''
@@ -182,6 +186,42 @@ def partial_removal_img(mnistimg, fraction = .5, axis = 0):
     mnistimg_corr = np.reshape(mnistimg_corr, (784,))
     
     return mnistimg_corr
+
+def plot_rec(cor_flat, rec_flat, savefig = ''):
+    '''
+    Display the RECONSTRUCTION
+    '''
+    
+    # PREPARING CMAPS
+    greycmap = pl.cm.Greys
+
+    # Get the colormap colors
+    corrupted_cmap = greycmap(np.arange(greycmap.N))
+
+    # Set alpha
+    corrupted_cmap[:,-1] = np.linspace(0, 1, greycmap.N)
+
+    # Create new colormap
+    corrupted_cmap = ListedColormap(corrupted_cmap)
+    
+    reccolors = [(1, 0, 0), (1, 1, 1)]
+    reccmap = LinearSegmentedColormap.from_list('rec', reccolors, N=2)
+    
+    # If the image is corrupted for partial reconstruction (pixels are set to -1)
+    cor_flat = np.copy(cor_flat)
+    cor_flat[cor_flat == -1] = 0
+    plt.figure(figsize = (2,2))
+    plt.imshow(1-np.reshape(rec_flat,(28,28)), cmap=reccmap)
+    plt.imshow(np.reshape(cor_flat,(28,28)), cmap=corrupted_cmap)
+        
+    plt.axis('off')
+    
+    if savefig != '':
+        # save the picture as svg in the location determined by savefig
+        plt.savefig(savefig, format='svg')
+    
+    plt.show()
+        
 
 #   ____    
 #  |___ \   
@@ -790,11 +830,58 @@ def learning_epoch_cached(mps, _imgs, epochs, lr,img_cache):
 #######################################################            
 
 def generate_sample(mps):
+    '''
+    Generate a sample from an MPS.
+    0. normalize the mps (probabilities need to be computed)
+    1. left canonize the mps (to easily compute the conditional probabilities
+    2. Starting from the last pixel (vN):
+                                                 __                       __
+                                 +---IN         |     +---IN      +---IN    |
+                                 |   |       /  |     |   |       |   |     |
+                                 | [0,1]    /   |     | [0,1]   + | [1,0]   |
+      2.1 P(vN = [0,1]) =        | [0,1]   /    |     | [0,1]     | [1,0]   |
+                                 |   |          |     |   |       |   |     |
+                                 +---IN         |__   +---+       +---+   __|
+                                 
+          (The denominator are the sum of probabilities that 
+           saturates the state space, the sum of their probabilities,
+           being the MPS normalized, is just 1.
+           
+        2.1.1 Compute the probability of VN being [0,1] then draw a random
+              number between 0 and 1, if the random number is less than
+              the probabiity computed vN becomes [0,1], else [1,0]
+              
+              vN then becomes either [0,1] or [1,0] (for the next steps too)
+         
+         
+                                  
+      2.k P(vK = [0,1]| v{K+1], ..., vN) = P(vK, v{K+1}, vN) / P(v{K+1}, ..., vN) =
+      
+             =   +---IK---I{K+1}---...---IN         I{K+1}---...---IN
+                 |   |    |              |      /   |              |
+                 | [0,1]  v{K+1}         vN    /    v{K+1}         vN
+                 | [0,1]  v{K+1}         vN   /     v{K+1}         vN
+                 |   |    |              |   /      |              |
+                 +---IK---I{K+1}---...---IN         I{K+1}---...---IN
+                 
+        2.k.1 Compute the probability of vK being [0,1] then draw a random
+              number between 0 and 1, if the random number is less than
+              the probabiity computed vN becomes [0,1], else [1,0]
+              
+              vK then becomes either [0,1] or [1,0] (for the next steps too)
+              
+       .
+       .
+       .
+    '''
     
     mps.normalize()
     
-    # It is clear that this can be easily performed if we 
-    # have gauged all the tensors except A_N to be left canonical 
+    # Canonicalize left
+    # We use the property of canonicalization to easily write
+    # conditional probabilities
+    # By left canonicalizing we will sample from right (784th pixel)
+    # to left (1st pixel)
     mps.left_canonize()
     
     # First pixel
@@ -804,6 +891,9 @@ def generate_sample(mps):
     #   |     vn
     #   |     |
     #   +----In
+    # To reach efficiency, we gradually contract half_contr with 
+    # the other tensors
+    # Contract vN to IN
     half_contr = np.einsum('a,ba', [0,1], mps.tensors[-1].data)
     p =  half_contr @ half_contr
     
@@ -811,13 +901,21 @@ def generate_sample(mps):
         generated = deque([0])
     else:
         generated = deque([1])
+        # We need to reconstruct half_contr that will be used for the
+        # next pixel
+        # Contract vN to IN
         half_contr = np.einsum('a,ba', [1,0], mps.tensors[-1].data)
         p =  half_contr @ half_contr
         
     previous_contr = half_contr
         
     for index in range(len(mps.tensors)-2,0,-1):
+        # Contract vK to IK
         new_contr = np.einsum('a,bca->bc', [0,1], mps.tensors[index].data)
+        # Contract new_contr to the contraction at the previous step
+        #   O-- previous_contr
+        #   |                  => new_contr -- previous_contr
+        #   vK
         new_contr = np.einsum('ab,b', new_contr, previous_contr)
     
         p = (new_contr @ new_contr)/(previous_contr @ previous_contr)
@@ -826,6 +924,7 @@ def generate_sample(mps):
             generated.appendleft(0)
         else:
             generated.appendleft(1)
+            # Contract [1,0] instead of [0,1]
             new_contr = np.einsum('a,bca->bc', [1,0], mps.tensors[index].data)
             new_contr = np.einsum('ab,b', new_contr, previous_contr)
             
@@ -845,3 +944,60 @@ def generate_sample(mps):
         generated.appendleft(1)
         
     return generated
+
+def reconstruct_SLOW(mps, corr_img):
+    # Copy and normalize psi
+    rec_mps = copy.copy(mps)
+    rec_mps.normalize()
+    
+    # Contracting know pixels
+    for site, pixel in enumerate(corr_img):
+        if pixel == 0:
+            if site == 0 or site == len(rec_mps.tensors) - 1:
+                data = np.einsum('ab,b',rec_mps[site].data, [0,1] )
+                inds = tuple(list(mps.tensors[site].inds)[:-1])
+                rec_mps.tensors[site].modify(data=data, inds = inds)
+            else:
+                data = np.einsum('abc,c',rec_mps[site].data, [0,1] )
+                inds = tuple(list(mps.tensors[site].inds)[:-1])
+                rec_mps.tensors[site].modify(data=data, inds = inds)
+        elif pixel == 1:
+            if site == 0 or site == len(rec_mps.tensors) - 1:
+                data = np.einsum('ab,b',rec_mps[site].data, [1,0] )
+                inds = tuple(list(mps.tensors[site].inds)[:-1])
+                rec_mps.tensors[site].modify(data=data, inds = inds)
+            else:
+                data = np.einsum('abc,c',rec_mps[site].data, [1,0] )
+                inds = tuple(list(mps.tensors[site].inds)[:-1])
+                rec_mps.tensors[site].modify(data=data, inds = inds)
+
+    reconstructed = copy.copy(corr_img)
+
+    for site, pixel in enumerate(corr_img):
+        if pixel == -1:
+            den = rec_mps @ rec_mps
+
+
+            temp_mps = copy.copy(rec_mps)
+            if site == 0 or site == len(rec_mps.tensors) - 1:
+                data = np.einsum('ab,b',temp_mps[site].data, [0,1] )
+                bdata = np.einsum('ab,b',temp_mps[site].data, [1,0] )
+            else:
+                data = np.einsum('abc,c',temp_mps[site].data, [0,1] )
+                bdata = np.einsum('abc,c',temp_mps[site].data, [1,0] )
+
+            inds = tuple(list(rec_mps.tensors[site].inds)[:-1])
+            temp_mps.tensors[site].modify(data=data, inds = inds)  
+
+            num = temp_mps @ temp_mps
+
+            p = num/den
+            if np.random.rand() < p:
+                rec_mps = temp_mps
+                reconstructed[site] = 0
+            else:
+                rec_mps[site].modify(data=bdata, inds=inds)
+                reconstructed[site] = 1
+                
+    return reconstructed
+    
