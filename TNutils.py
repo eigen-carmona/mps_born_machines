@@ -154,7 +154,7 @@ def plot_img(img_flat, flip_color = True, savefig = ''):
         plt.savefig(savefig, format='svg')
         plt.show()
         
-def partial_removal_img(mnistimg, fraction = .5, axis = 0):
+def partial_removal_img(mnistimg, fraction = .5, axis = 0, half = None):
     '''
     Corrupt (with -1 values) a portion of an input image (from the test set)
     to test if the algorithm can reconstruct it
@@ -178,10 +178,19 @@ def partial_removal_img(mnistimg, fraction = .5, axis = 0):
     mnistimg_corr = np.copy(mnistimg)
     mnistimg_corr = np.reshape(mnistimg_corr, (28,28))
     
+    if half == None:
+        half = np.random.randint(2)
+    
     if axis == 0:
-        mnistimg_corr[int(28*(1-fraction)):,:] = -1
+        if half == 0:
+            mnistimg_corr[int(28*(1-fraction)):,:] = -1
+        else:
+            mnistimg_corr[:int(28*(1-fraction)),:] = -1
     else:
-        mnistimg_corr[:,int(28*(1-fraction)):] = -1
+        if half == 0:
+            mnistimg_corr[:,int(28*(1-fraction)):] = -1
+        else:
+            mnistimg_corr[:,:int(28*(1-fraction))] = -1
         
     mnistimg_corr = np.reshape(mnistimg_corr, (784,))
     
@@ -331,10 +340,16 @@ def quimb_transform_img2state(img):
     # O  O ... O
     return img_TN
 
-stater = lambda x: [0,1] if x == 0 else [1,0]
+
+def stater(x,i):
+    if x in [0,1]:
+        vec = [int(x), int(not x)]
+        return qtn.Tensor(vec,inds=(f'v{i}',))
+    return None
+
 def tens_picture(picture):
     '''Converts an array of bits into a list of tensors compatible with a tensor network.'''
-    tens = [qtn.Tensor(stater(n),inds=(f'v{i}',)) for i, n in enumerate(picture)]
+    tens = [stater(n,i) for i, n in enumerate(picture)]
     return tens
 
 def left_right_cache(mps,_imgs):
@@ -829,7 +844,7 @@ def learning_epoch_cached(mps, _imgs, epochs, lr,img_cache):
 #     |_|(_) GENERATION
 #######################################################            
 
-def generate_sample(mps):
+def generate_sample(mps, reconstruct = False):
     '''
     Generate a sample from an MPS.
     0. normalize the mps (probabilities need to be computed)
@@ -875,14 +890,15 @@ def generate_sample(mps):
        .
     '''
     
-    mps.normalize()
+    
     
     # Canonicalize left
     # We use the property of canonicalization to easily write
     # conditional probabilities
     # By left canonicalizing we will sample from right (784th pixel)
     # to left (1st pixel)
-    mps.left_canonize()
+    if not reconstruct:
+        mps.left_canonize()
     
     # First pixel
     #   +----In    +
@@ -1000,4 +1016,73 @@ def reconstruct_SLOW(mps, corr_img):
                 reconstructed[site] = 1
                 
     return reconstructed
+
+def reconstruct(mps, corr_img):
+    
+    # Copy the tensor, we need to perform vertical
+    # contractions among all know pixels
+    rec_mps = copy.copy(mps)
+    rec_mps.normalize()
+    
+    # Contracting know pixels
+    corr_img_tn = tens_picture(corr_img)
+    
+    for site, img_tensor in enumerate(corr_img_tn):
+        if img_tensor: # if img_tensor is not None
+            contr = tneinsum2(img_tensor, rec_mps[site])
+            rec_mps[site].modify(data=contr.data, inds=contr.inds)
+    
+    first = False # check if we already found an unknown pixel
+    upixel = -1
+    for site in range(len(rec_mps.tensors)):
+        if site == 0:
+            ut = rec_mps.tensors[site]
+            if 'v0' in rec_mps.tensors[site].inds: # 0 is unknown
+                first = True
+                upixel = upixel + 1
+                ut.modify(tags='U'+str(upixel))
+                utn = qtn.Tensor(ut)
+                ut = rec_mps.tensors[site+1]
+            else:
+                ut = tneinsum2(ut, rec_mps.tensors[site+1])
+        else:
+            if 'v'+str(site) in rec_mps.tensors[site].inds:
+                upixel = upixel + 1
+                ut.modify(tags='U'+str(upixel))
+                if not first:
+                    utn = qtn.Tensor(ut)
+                else:
+                    utn = utn & ut
+                first = True
+                if site < len(rec_mps.tensors) - 1:
+                    ut = rec_mps.tensors[site+1]
+
+            else:
+                if site == len(rec_mps.tensors) - 1:
+                    finalcontr = tneinsum2(utn.tensors[-1],ut)
+                    utn.tensors[-1].modify(data=finalcontr.data, inds = finalcontr.inds)
+                else:
+                    ut = tneinsum2(ut, rec_mps.tensors[site+1])
+                    
+    utn = qtn.tensor_1d.TensorNetwork1DFlat(utn.tensors)
+    # In order to left canonize i need a class that is a 
+    # TensorNetwork1DFlat or MatrixProductState, but
+    # I did not manage to transform utn in a MatrixProductState
+    
+    # The following attributes are needed for leftcanonizing
+    utn.cyclic = rec_mps.cyclic
+    utn._L = len(utn.tensors)
+    utn._site_tag_id = 'U{}'
+    
+    utn.left_canonize()
+    
+    # Generate from the unknown pixels network
+    reconstruction = generate_sample(utn, reconstruct = True)
+    
+    rec_img = copy.copy(corr_img)
+    rec_img[rec_img == -1] = reconstruction
+    
+    return rec_img
+    
+    
     
