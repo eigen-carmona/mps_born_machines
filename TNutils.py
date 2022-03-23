@@ -738,33 +738,28 @@ def learning_step_cached(mps, index, _imgs, lr, img_cache, going_right = True, *
     # SD.tensors[1] -> I_{index+1}
     return SD
 
-def learning_epoch_cached(mps, _imgs, epochs, lr,img_cache,**kwargs):
+def learning_epoch_cached(mps, _imgs, epochs, lr,img_cache,batch_size = 25,**kwargs):
     '''
     Manages the sliding left and right.
     From tensor 1 (the second), apply learning_step() sliding to the right
     At tensor max-2, apply learning_step() sliding to the left back to tensor 1
     '''
+    # We expect, however, that the batch size is smaler than the input set
+    batch_size = min(len(_imgs),batch_size)
+    guide = np.arange(len(_imgs))
+    # Execute the epochs
     for epoch in range(epochs):
         print('NLL: {} | Baseline: {}'.format(computeNLL_cached(mps, _imgs, img_cache, 0), np.log(len(_imgs)) ) )
         print(f'epoch {epoch+1}/{epochs}')
         # [1,2,...,780,781,780,...,2,1]
         progress = tq.tqdm([i for i in range(0,len(mps.tensors)-1)] + [i for i in range(len(mps.tensors)-3,0,-1)], leave=True)
         #progress = tq.tqdm([i for i in range(1,len(mps.tensors)-2)] + [i for i in range(len(mps.tensors)-3,0,-1)], leave=True)
-        # roadmap:
-        # full cache
-        # randomly chosen pictures
-        # perform gradient descent step with such pictures
-        # randomly chose pictures
-        # we need to update the cache for the chosen pictures,
-        # so as to quickly compute the variables that go into the gradient descent
-        # in order to update the cache, we must know _where we left_
-        # what does this mean? "The last epoch we updated the image cache, the site and the direction"
-        # If the last epoch is not the same as the current, we need to update the image cache altogether up to the target site
-        # The above is bullshit: it depends on the direction of the last update and the current direction
-        # Firstly we slide right
+
         going_right = True
         for index in progress:
-            A = learning_step_cached(mps,index,_imgs,lr,img_cache,going_right,**kwargs)
+            np.random.shuffle(guide)
+            mask = guide[:batch_size]
+            A = learning_step_cached(mps,index,_imgs[mask],lr,img_cache[mask],going_right,**kwargs)
             if index == 0:
                 mps.tensors[index].modify(data=np.transpose(A.tensors[0].data,(1,0)))
                 mps.tensors[index+1].modify(data=A.tensors[1].data)
