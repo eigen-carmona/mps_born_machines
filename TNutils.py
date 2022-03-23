@@ -343,7 +343,7 @@ def quimb_transform_img2state(img):
 
 def stater(x,i):
     if x in [0,1]:
-        vec = [int(not x), int(x)]
+        vec = [int(x), int(not x)]
         return qtn.Tensor(vec,inds=(f'v{i}',))
     return None
 
@@ -1025,26 +1025,13 @@ def reconstruct(mps, corr_img):
     rec_mps.normalize()
     
     # Contracting know pixels
-    for site, pixel in enumerate(corr_img):
-        if pixel == 0:
-            if site == 0 or site == len(rec_mps.tensors) - 1:
-                data = np.einsum('ab,b',rec_mps[site].data, [0,1] )
-                inds = tuple(list(mps.tensors[site].inds)[:-1])
-                rec_mps.tensors[site].modify(data=data, inds = inds)
-            else:
-                data = np.einsum('abc,c',rec_mps[site].data, [0,1] )
-                inds = tuple(list(mps.tensors[site].inds)[:-1])
-                rec_mps.tensors[site].modify(data=data, inds = inds)
-        elif pixel == 1:
-            if site == 0 or site == len(rec_mps.tensors) - 1:
-                data = np.einsum('ab,b',rec_mps[site].data, [1,0] )
-                inds = tuple(list(mps.tensors[site].inds)[:-1])
-                rec_mps.tensors[site].modify(data=data, inds = inds)
-            else:
-                data = np.einsum('abc,c',rec_mps[site].data, [1,0] )
-                inds = tuple(list(mps.tensors[site].inds)[:-1])
-                rec_mps.tensors[site].modify(data=data, inds = inds)
-                
+    corr_img_tn = tens_picture(corr_img)
+    
+    for site, img_tensor in enumerate(corr_img_tn):
+        if img_tensor: # if img_tensor is not None
+            contr = tneinsum2(img_tensor, rec_mps[site])
+            rec_mps[site].modify(data=contr.data, inds=contr.inds)
+    
     first = False # check if we already found an unknown pixel
     upixel = -1
     for site in range(len(rec_mps.tensors)):
@@ -1096,5 +1083,6 @@ def reconstruct(mps, corr_img):
     rec_img[rec_img == -1] = reconstruction
     
     return rec_img
+    
     
     
