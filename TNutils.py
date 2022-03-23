@@ -154,7 +154,7 @@ def plot_img(img_flat, flip_color = True, savefig = ''):
         plt.savefig(savefig, format='svg')
         plt.show()
         
-def partial_removal_img(mnistimg, fraction = .5, axis = 0):
+def partial_removal_img(mnistimg, fraction = .5, axis = 0, half = None):
     '''
     Corrupt (with -1 values) a portion of an input image (from the test set)
     to test if the algorithm can reconstruct it
@@ -178,10 +178,19 @@ def partial_removal_img(mnistimg, fraction = .5, axis = 0):
     mnistimg_corr = np.copy(mnistimg)
     mnistimg_corr = np.reshape(mnistimg_corr, (28,28))
     
+    if half == None:
+        half = np.random.randint(2)
+    
     if axis == 0:
-        mnistimg_corr[int(28*(1-fraction)):,:] = -1
+        if half == 0:
+            mnistimg_corr[int(28*(1-fraction)):,:] = -1
+        else:
+            mnistimg_corr[:int(28*(1-fraction)),:] = -1
     else:
-        mnistimg_corr[:,int(28*(1-fraction)):] = -1
+        if half == 0:
+            mnistimg_corr[:,int(28*(1-fraction)):] = -1
+        else:
+            mnistimg_corr[:,:int(28*(1-fraction))] = -1
         
     mnistimg_corr = np.reshape(mnistimg_corr, (784,))
     
@@ -883,7 +892,6 @@ def generate_sample(mps, reconstruct = False):
     # By left canonicalizing we will sample from right (784th pixel)
     # to left (1st pixel)
     if not reconstruct:
-        mps.normalize()
         mps.left_canonize()
     
     # First pixel
@@ -1037,7 +1045,11 @@ def reconstruct(mps, corr_img):
         if site == 0:
             ut = rec_mps.tensors[site]
             if 'v0' in rec_mps.tensors[site].inds: # 0 is unknown
-                ut = tneinsum2(ut,rec_mps.tensors[site+1])
+                first = True
+                upixel = upixel + 1
+                ut.modify(tags='U'+str(upixel))
+                utn = qtn.Tensor(ut)
+                ut = rec_mps.tensors[site+1]
             else:
                 ut = tneinsum2(ut, rec_mps.tensors[site+1])
         else:
@@ -1053,25 +1065,18 @@ def reconstruct(mps, corr_img):
                     ut = rec_mps.tensors[site+1]
 
             else:
-                ut = tneinsum(ut, rec_mps.tensors[site+1])
                 if site == len(rec_mps.tensors) - 1:
-                    utn = utn @ ut
-    
+                    finalcontr = tneinsum2(utn.tensors[-1],ut)
+                    utn.tensors[-1].modify(data=finalcontr.data, inds = finalcontr.inds)
+                else:
+                    ut = tneinsum2(ut, rec_mps.tensors[site+1])
+                    
     utn = qtn.tensor_1d.TensorNetwork1DFlat(utn.tensors)
-    
     # In order to left canonize i need a class that is a 
     # TensorNetwork1DFlat or MatrixProductState, but
     # I did not manage to transform utn in a MatrixProductState
     
-    # The following attributes are needed for normalizing and leftcanonizing
-    utn.cyclic = rec_mps.cyclic
-    utn._L = len(utn.tensors)
-    utn._site_tag_id = 'U{}'
-    
-    # Normalization
-    utn = utn / np.sqrt(utn @ utn)
-    
-    # After normalization some properties disappear somehow
+    # The following attributes are needed for leftcanonizing
     utn.cyclic = rec_mps.cyclic
     utn._L = len(utn.tensors)
     utn._site_tag_id = 'U{}'
@@ -1085,4 +1090,5 @@ def reconstruct(mps, corr_img):
     rec_img[rec_img == -1] = reconstruction
     
     return rec_img
+    
     
