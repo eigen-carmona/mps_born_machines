@@ -350,7 +350,7 @@ def stater(x,i):
 def tens_picture(picture):
     '''Converts an array of bits into a list of tensors compatible with a tensor network.'''
     tens = [stater(n,i) for i, n in enumerate(picture)]
-    return tens
+    return np.array(tens)
 
 def left_right_cache(mps,_imgs):
     # Cache
@@ -373,7 +373,7 @@ def left_right_cache(mps,_imgs):
         # reversing the right cache for site indexing consistency
         right_cache.reverse()
         img_cache.append((left_cache,right_cache))
-    return img_cache
+    return np.array(img_cache)
 
 def computepsi(mps, img):
     '''
