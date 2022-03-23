@@ -750,6 +750,17 @@ def learning_epoch_cached(mps, _imgs, epochs, lr,img_cache,**kwargs):
         # [1,2,...,780,781,780,...,2,1]
         progress = tq.tqdm([i for i in range(0,len(mps.tensors)-1)] + [i for i in range(len(mps.tensors)-3,0,-1)], leave=True)
         #progress = tq.tqdm([i for i in range(1,len(mps.tensors)-2)] + [i for i in range(len(mps.tensors)-3,0,-1)], leave=True)
+        # roadmap:
+        # full cache
+        # randomly chosen pictures
+        # perform gradient descent step with such pictures
+        # randomly chose pictures
+        # we need to update the cache for the chosen pictures,
+        # so as to quickly compute the variables that go into the gradient descent
+        # in order to update the cache, we must know _where we left_
+        # what does this mean? "The last epoch we updated the image cache, the site and the direction"
+        # If the last epoch is not the same as the current, we need to update the image cache altogether up to the target site
+        # The above is bullshit: it depends on the direction of the last update and the current direction
         # Firstly we slide right
         going_right = True
         for index in progress:
