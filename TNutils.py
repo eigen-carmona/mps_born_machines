@@ -568,6 +568,26 @@ def computeNLL_cached(mps, _imgs, img_cache, index):
     
     return - (2/len(_imgs)) * logpsi + np.log(Z)
 
+def compress(mps, max_bond):
+    comp_mps = copy.copy(mps)
+    
+    for index in range(len(comp_mps.tensors)-2,-1,-1):
+        A = qtn.tensor_contract(comp_mps[index],comp_mps[index+1])
+
+        if index == 0:
+            SD = A.split(['v'+str(index)], absorb='left', max_bond = max_bond)
+        else:
+            SD = A.split(['i'+str(index-1),'v'+str(index)], absorb='left',max_bond = max_bond)
+
+        if index == 0:
+            comp_mps.tensors[index].modify(data=np.transpose(SD.tensors[0].data,(1,0)))
+            comp_mps.tensors[index+1].modify(data=SD.tensors[1].data)
+        else:
+            comp_mps.tensors[index].modify(data=np.transpose(SD.tensors[0].data,(0,2,1)))
+            comp_mps.tensors[index+1].modify(data=SD.tensors[1].data)
+    
+    return comp_mps
+
 #   _____  
 #  |___ /  
 #    |_ \  
