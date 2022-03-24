@@ -841,6 +841,51 @@ def learning_epoch_cached(mps, _imgs, epochs, lr,img_cache,batch_size = 25,**kwa
     print('NLL: {} | Baseline: {}'.format(computeNLL_cached(mps, _imgs, img_cache,0), np.log(len(_imgs)) ) )
     # cha cha real smooth
 
+def stochastic_cache_update(mps,_imgs,img_cache,last_dirs,last_sites,last_epochs,mask,going_right,curr_epoch,curr_site):
+    '''
+    each last_x array is a size len(img_cache) array which specifies x for the last update of the image at the given position
+    last_dir: specifices the direction we were heading when we last updated each image cache
+    last_site: specifies the last index site for which we updated the image cache
+    last_epoch: specifies the epoch during which we last updated the image cache
+    mask: mask array of images whose cache we wish to use.
+    '''
+    for index in mask:
+        if img_cache[index] is None:
+            # Null state case
+            all_cache(curr_site)
+        else:
+            last_epoch = last_epochs[index]
+            went_right = last_dirs[index]
+            last_site = last_sites[index]
+
+        last_sites[index] = curr_site
+        last_epochs[index] = curr_epoch
+        last_dirs[index] = going_right
+
+        if curr_epoch > last_epoch:#(curr_epoch assumed to be >= last_epoch)
+            if (curr_epoch == last_epoch + 1) and (going_right>went_right):
+                # (It is assumed that the first stage is going right, and the second, going left)
+                # If we are in the first stage of the current epoch,
+                # and we were at the second stage of the last one,
+                # we build the left cache from the initial site,
+                # and correspondingly rescale the right cache, which is still useful.
+                missing_function()
+            else:
+                # In this scenario, we must recreate everything
+                all_cache()
+        elif going_right<went_right:
+            # (we cannot be in the same epoch and going right if last time we were going left)
+            # We're then in the same epoch
+            # if we're now going left and were going right, we need to create the right cache from the last site
+            # and correspondingly rescale the left cache, which is still useful
+            missing_function()
+        else: # We're then going in the same direction as last time
+            # So we must grow the corresponding site and shorten the other
+            half_cache()
+
+
+
+
 #   _  _    
 #  | || |   
 #  | || |_  
