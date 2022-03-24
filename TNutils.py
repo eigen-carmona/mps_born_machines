@@ -1087,6 +1087,47 @@ def reconstruct(mps, corr_img):
     rec_img[rec_img == -1] = reconstruction
     
     return rec_img
+ 
+#  ____   
+# | ___|  
+# |___ \  
+#  ___) | 
+# |____(_) VISUALIZATION
+#######################################################  
+
+def plot_dbonds(mps, savefig=''):
+    '''
+    Plot the scatter of the bond dimension of every site
+    using a colormap to indicate the distance from the center
     
+    Supposedly the closer to the margin, the less information is needed
+    to be shared
+    '''
     
+    # side of the image
+    L = np.sqrt(len(mps.tensors)).astype(int)
     
+    # Extract the distance from the margin
+    # for every pixel 
+    poss = []
+    for pos in range(L*L-1):
+        poss.append( [pos//L, pos%L] )  
+    poss = np.array(poss)
+    poss = poss - L//2
+    poss = np.max(np.abs(poss), axis=1)
+    
+    # Simple cmap for the distance from the margin
+    bcolors = [(1, 1, 0), (1, 0, 0)]
+    bcmap = LinearSegmentedColormap.from_list('rec', bcolors, N=L//2)
+    
+    sc = plt.scatter(np.arange(L*L-1), mps.bond_sizes(), c=poss, cmap = bcmap)
+    plt.colorbar(sc)
+    plt.xlabel('Site')
+    plt.ylabel('Bond dimension')
+    plt.title('(Right) bond dimension for every pixel')
+    
+    if savefig != '':
+        # save the picture as svg in the location determined by savefig
+        plt.savefig(savefig, format='svg')
+    plt.show()
+       
