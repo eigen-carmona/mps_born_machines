@@ -35,6 +35,7 @@ import collections
 import opt_einsum as oe
 import itertools
 import copy
+import os
 #######################################################
 
 '''
@@ -1066,3 +1067,38 @@ def plot_dbonds(mps, savefig=''):
         plt.savefig(savefig, format='svg')
     plt.show()
        
+        
+#  __    
+# / /_   
+#| '_ \  
+#| (_) | 
+# \___(_) OTHER
+#######################################################    
+
+def save_mps_sets(mps, train_set, foldname, test_set = None):
+    # If folder does not exists
+    if not os.path.exists('./'+foldname):
+        # Make the folder
+        os.makedirs('./'+foldname)
+        
+    # Save the mps
+    quimb.utils.save_to_disk(mps, './'+foldname+'/mps')
+    
+    # Save the images
+    np.save('./'+foldname+'/train_set.npy', train_set)
+    
+    if test_set:
+        np.save('./'+foldname+'/test_set.npy', test_set)
+        
+def load_mps_sets(foldname):
+    # Load the mps
+    mps = quimb.utils.load_from_disk('./'+foldname+'/mps')
+    
+    # Load the images
+    train_set = np.load('./'+foldname+'/train_set.npy')
+    
+    if os.path.isfile('./'+foldname+'/test_set.npy'):
+        test_set =  np.load('./'+foldname+'/test_set.npy')
+    else: test_set = None
+    
+    return mps, train_set, test_set
