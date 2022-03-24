@@ -558,9 +558,14 @@ def computeNLL_cached(mps, _imgs, img_cache, index):
         right = tneinsum2(R[index+1],_img[index+1])
         psiprime = tneinsum2(left,right)
         logpsi = logpsi + np.log(np.abs(qtn.tensor_contract(psiprime,A)))
-
-
-    return - (2/len(_imgs)) * logpsi
+    #             __    _        _         __  _    _           _        _
+    # NLL = - _1_ \  ln|  _P(V)_  | = -_1_ \  |  ln| |Psi(v)|^2  | - lnZ  |
+    #         |T| /_   |_   Z    _|    |T| /_ |_   |_           _|       _|
+    #             _  __                      _         __
+    #     = -_1_ | 2 \  ln|Psi(v)| - |T|lnZ   | = -_2_ \  ln|Psi(v)|  - lnZ
+    #        |T| |_  /_                      _|    |T| /_
+    
+    return - (2/len(_imgs)) * logpsi + np.log(Z)
 
 #   _____  
 #  |___ /  
@@ -582,76 +587,6 @@ def learning_step(mps, index, imgs, lr, going_right = True):
     
     # Assumption: The mps is canonized
     Z = A@A
-    
-    # Computing the second term, summation over
-    # the data-dependent terms
-    psifrac = 0
-    for img in imgs:
-        num = computepsiprime(mps,img,index)    # PSI'(v)
-        # 'ijkl,ilkj' or 'ijkl,ijkl'?
-        # computepsiprime was coded so that the ordering of the indexes is the same
-        # as the contraction A = mps.tensors[index] @ mps.tensors[index+1]
-        # so it should be the second one    
-        den = np.einsum('ijkl,ijkl',A.data,num) # PSI(v)
-        
-        # Theoretically the two computations above can be optimized in a single function
-        # because we are contracting the very same tensors for the most part
-        
-        psifrac = psifrac + num/den
-    
-    psifrac = psifrac/imgs.shape[0]
-    
-    # Derivative of the NLL
-    dNLL = (A/Z) - psifrac
-    
-    A = A + lr*dNLL # Update A_{i,i+1}
-    
-    # Now the tensor A_{i,i+1} must be split in I_k and I_{k+1}.
-    # To preserve canonicalization:
-    # > if we are merging sliding towards the RIGHT we need to absorb right
-    #                                           S  v  D
-    #     ->-->--A_{k,k+1}--<--<-   =>   ->-->-->--x--<--<--<-   =>    >-->-->--o--<--<-  
-    #      |  |    |   |    |  |          |  |  |   |    |  |          |  |  |  |  |  |
-    #
-    # > if we are merging sliding toward the LEFT we need to absorb left
-    #
-    if going_right:
-        # FYI: split method does apply SVD by default
-        # there are variations of svd that can be inspected 
-        # for a performance boost
-        SD = A.split(['i'+str(index-1),'v'+str(index)], absorb='right')
-    else:
-        SD = A.split(['i'+str(index-1),'v'+str(index)], absorb='left')
-       
-    # SD.tensors[0] -> I_{index}
-    # SD.tensors[1] -> I_{index+1}
-    return SD
-
-def learning_step_numpy(mps, index, imgs, lr, going_right = True):
-    '''
-    DOES NOT WORK
-    
-    Compute the updated merged tensor A_{index,index+1}
-    
-      UPDATE RULE:  A_{i,i+1} += lr* 2 *( A_{i,i+1}/Z - ( SUM_{i=1}^{m} psi'(v)/psi(v) )/m )
-      
-    '''
-    
-    # Merge I_k and I_{k+1} in a single rank 4 tensor ('i_{k-1}', 'v_k', 'i_{k+1}', 'v_{k+1}')
-    # OLD: A = (mps.tensors[index] @ mps.tensors[index+1])
-    # '@' may be too slow
-    if index == 0:
-        A = np.einsum('ij,iab->jab',mps.tensors[index].data,mps.tensors[index+1].data)
-        # Assumption: The mps is canonized
-        Z = np.einsum('jab,jab',A,A)
-    elif index == (len(mps.tensors)-2):
-        A = np.einsum('ijk,ja->ika',mps.tensors[index].data,mps.tensors[index+1].data)
-        # Assumption: The mps is canonized
-        Z = np.einsum('ika,ika',A,A)
-    else:
-        A = np.einsum('ijk,jab->ikab',mps.tensors[index].data,mps.tensors[index+1].data)
-        # Assumption: The mps is canonized
-        Z = np.einsum('ikab,ikab',A,A)
     
     # Computing the second term, summation over
     # the data-dependent terms
