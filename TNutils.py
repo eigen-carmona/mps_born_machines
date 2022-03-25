@@ -317,7 +317,7 @@ def initialize_mps(Ldim = 28*28, bdim = 30, canonicalize = 1):
     
     # Reindexing the last tensor
     tensor = tensor + 1
-    mps = mps.reindex({mps.tensors[tensor].inds[0]: 'i'+str(tensor), 
+    mps = mps.reindex({mps.tensors[tensor].inds[0]: 'i'+str(tensor-1),
                        mps.tensors[tensor].inds[1]: 'v'+str(tensor)})  
     
     return mps
