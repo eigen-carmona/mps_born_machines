@@ -545,7 +545,7 @@ def computeNLL(mps, imgs):
     for img in imgs:
         lnsum = lnsum + np.log( abs(computepsi(mps,img)) )
         
-    return - 2 * lnsum / imgs.shape[0]
+    return - 2 * (lnsum / imgs.shape[0]) + np.log(mps @ mps)
 
 def computeNLL_cached(mps, _imgs, img_cache, index):
 
