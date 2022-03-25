@@ -532,7 +532,7 @@ def psi_primed(mps,_img,index):
     psi_p = contr_L@_img[index]@_img[index+1]@contr_R
     return psi_p
 
-def computeNLL(mps, imgs):
+def computeNLL(mps, imgs, canonicalized_index = False):
     '''
     Computes the Negative Log Likelihood of a Tensor Network (mps)
     over a set of images (imgs)
@@ -540,12 +540,17 @@ def computeNLL(mps, imgs):
      > NLL = -(1/|T|) * SUM_{v\in T} ( ln P(v) ) = -(1/|T|) * SUM_{v\in T} ( ln psi(v)**2 )
            = -(2/|T|) * SUM_{v\in T} ( ln |psi(v)| )
     '''
-    
-    lnsum = 0
+     
+    if not canonicalized_index:
+        Z = mps @ mps
+    else:
+        Z = tneinsum2(mps.tensors[canonicalized_index], mps.tensors[canonicalized_index]).data
+        
+    lnsum = 0   
     for img in imgs:
         lnsum = lnsum + np.log( abs(computepsi(mps,img)) )
         
-    return - 2 * (lnsum / imgs.shape[0]) + np.log(mps @ mps)
+    return - 2 * (lnsum / imgs.shape[0]) + np.log(Z)
 
 def computeNLL_cached(mps, _imgs, img_cache, index):
 
