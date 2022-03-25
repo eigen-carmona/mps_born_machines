@@ -883,24 +883,25 @@ def stochastic_cache_update(mps,_imgs,img_cache,last_dirs,last_sites,last_epochs
 def restart_cache(mps,site,left_cache,right_cache,_img):
     left_site = site
     right_site = site + 1
-    left_cache[:site] = extend_cache(mps,qtn.Tensor(),_img,0,left_site)
-    right_cache[site+1:] = np.flip(extend_cache(mps,qtn.Tensor(),_img,len(mps),right_site))
+    left_cache[:site+1] = extend_cache(mps,qtn.Tensor(),_img,0,left_site)
+    right_cache[site+1:] = np.flip(extend_cache(mps,qtn.Tensor(),_img,len(_img)-1,right_site))
     return left_cache,right_cache
 
 def advance_cache(mps,left_cache,right_cache,going_right,curr_site,last_site,_img):
     if going_right:
         state = left_cache[last_site]
-        left_cache[last_site:curr_site] = extend_cache(mps,state,_img,last_site,curr_site-1)
+        left_cache[last_site:curr_site+1] = extend_cache(mps,state,_img,last_site,curr_site)
     else:
         state = right_cache[last_site+1]
-        right_cache[curr_site+1:last_site+1] = np.flip(extend_cache(mps,state,_img,last_site-1,curr_site+1))
+        right_cache[curr_site+1:last_site+1] = np.flip(extend_cache(mps,state,_img,last_site,curr_site+1))
     return left_cache, right_cache
 
 def extend_cache(mps,base,_img,start,end):
     out = [base]
-    step = (end>=start)-(end<start)
+    step = int(end>=start)-int(end<start)
     guide = np.arange(start,end,step)
-    for A, qubit in zip(mps[guide],_img[guide]):
+    for index in guide:
+        A, qubit = mps[index],_img[index]
         # First, contract the state, then the qubit
         # TODO: is qtn.tensor_contract(out[-1],A,qubit) faster?
         out.append(tneinsum2(tneinsum2(out[-1],A),qubit))
@@ -913,16 +914,16 @@ def half_cache(mps,right_cache,left_cache,last_site,curr_site,going_right,_img):
     '''
     if going_right:
         # This means we were going left last time, therefore we have to recreate the whole left cache
-        left_cache[:curr_site] = extend_cache(mps,qtn.Tensor(),_img,last_site,curr_site)
+        left_cache[:curr_site+1] = extend_cache(mps,qtn.Tensor(),_img,0,curr_site)
         if curr_site < last_site:
             state = right_cache[last_site+1]
-            right_cache[curr_site+1:last_site+1] = np.flip(extend_cache(mps,state,_img,last_site+1,curr_site-1))
+            right_cache[curr_site+1:last_site+1] = np.flip(extend_cache(mps,state,_img,last_site,curr_site+1))
     else:
         # We were going right and are now going left. Restart right cache
-        right_cache[curr_site+1:] = np.flip(extend_cache(mps,qtn.Tensor(),_img,len(mps),curr_site + 1))
+        right_cache[curr_site+1:] = np.flip(extend_cache(mps,qtn.Tensor(),_img,len(_img)-1,curr_site+1))
         if curr_site > last_site:
             state = left_cache[last_site]
-            left_cache[last_site:curr_site] = extend_cache(mps,state,_img,last_site+1,curr_site)
+            left_cache[last_site:curr_site+1] = extend_cache(mps,state,_img,last_site,curr_site)
     return left_cache, right_cache
 
 #   _  _    
