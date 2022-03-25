@@ -532,7 +532,7 @@ def psi_primed(mps,_img,index):
     psi_p = contr_L@_img[index]@_img[index+1]@contr_R
     return psi_p
 
-def computeNLL(mps, imgs):
+def computeNLL(mps, imgs, canonicalized_index = False):
     '''
     Computes the Negative Log Likelihood of a Tensor Network (mps)
     over a set of images (imgs)
@@ -540,12 +540,17 @@ def computeNLL(mps, imgs):
      > NLL = -(1/|T|) * SUM_{v\in T} ( ln P(v) ) = -(1/|T|) * SUM_{v\in T} ( ln psi(v)**2 )
            = -(2/|T|) * SUM_{v\in T} ( ln |psi(v)| )
     '''
-    
-    lnsum = 0
+     
+    if not canonicalized_index:
+        Z = mps @ mps
+    else:
+        Z = tneinsum2(mps.tensors[canonicalized_index], mps.tensors[canonicalized_index]).data
+        
+    lnsum = 0   
     for img in imgs:
         lnsum = lnsum + np.log( abs(computepsi(mps,img)) )
         
-    return - 2 * lnsum / imgs.shape[0]
+    return - 2 * (lnsum / imgs.shape[0]) + np.log(Z)
 
 def computeNLL_cached(mps, _imgs, img_cache, index):
 
@@ -567,6 +572,45 @@ def computeNLL_cached(mps, _imgs, img_cache, index):
     #        |T| |_  /_                      _|    |T| /_
     
     return - (2/len(_imgs)) * logpsi + np.log(Z)
+
+def compress(mps, max_bond):
+    
+    for index in range(len(mps.tensors)-2,-1,-1):
+        A = qtn.tensor_contract(mps[index],mps[index+1])
+
+        if index == 0:
+            SD = A.split(['v'+str(index)], absorb='left', max_bond = max_bond)
+        else:
+            SD = A.split(['i'+str(index-1),'v'+str(index)], absorb='left',max_bond = max_bond)
+
+        if index == 0:
+            mps.tensors[index].modify(data=np.transpose(SD.tensors[0].data,(1,0)))
+            mps.tensors[index+1].modify(data=SD.tensors[1].data)
+        else:
+            mps.tensors[index].modify(data=np.transpose(SD.tensors[0].data,(0,2,1)))
+            mps.tensors[index+1].modify(data=SD.tensors[1].data)
+    
+    return mps
+
+def compress_copy(mps, max_bond):
+    comp_mps = copy.copy(mps)
+    
+    for index in range(len(comp_mps.tensors)-2,-1,-1):
+        A = qtn.tensor_contract(comp_mps[index],comp_mps[index+1])
+
+        if index == 0:
+            SD = A.split(['v'+str(index)], absorb='left', max_bond = max_bond)
+        else:
+            SD = A.split(['i'+str(index-1),'v'+str(index)], absorb='left',max_bond = max_bond)
+
+        if index == 0:
+            comp_mps.tensors[index].modify(data=np.transpose(SD.tensors[0].data,(1,0)))
+            comp_mps.tensors[index+1].modify(data=SD.tensors[1].data)
+        else:
+            comp_mps.tensors[index].modify(data=np.transpose(SD.tensors[0].data,(0,2,1)))
+            comp_mps.tensors[index+1].modify(data=SD.tensors[1].data)
+    
+    return comp_mps
 
 #   _____  
 #  |___ /  
@@ -1075,7 +1119,7 @@ def plot_dbonds(mps, savefig=''):
 # \___(_) OTHER
 #######################################################    
 
-def save_mps_sets(mps, train_set, foldname, test_set = None):
+def save_mps_sets(mps, train_set, foldname, test_set = []):
     # If folder does not exists
     if not os.path.exists('./'+foldname):
         # Make the folder
@@ -1087,7 +1131,7 @@ def save_mps_sets(mps, train_set, foldname, test_set = None):
     # Save the images
     np.save('./'+foldname+'/train_set.npy', train_set)
     
-    if test_set:
+    if len(test_set) > 0:
         np.save('./'+foldname+'/test_set.npy', test_set)
         
 def load_mps_sets(foldname):
