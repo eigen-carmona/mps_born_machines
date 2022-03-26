@@ -132,7 +132,7 @@ def get_data(train_size = 1000, test_size = 100, grayscale_threshold = .5):
     # Return training set and test set
     return npmnist[:train_size], npmnist[train_size:]
 
-def plot_img(img_flat, flip_color = True, savefig = ''):
+def plot_img(img_flat, shape, flip_color = True, savefig = ''):
     '''
     Display the image from the flattened form
     '''
@@ -143,10 +143,10 @@ def plot_img(img_flat, flip_color = True, savefig = ''):
     
     # Background white, strokes black
     if flip_color:
-        plt.imshow(1-np.reshape(img_flat,(28,28)), cmap='gray')
+        plt.imshow(1-np.reshape(img_flat,shape), cmap='gray')
     # Background black, strokes white
     else:
-        plt.imshow(np.reshape(img_flat,(28,28)), cmap='gray')
+        plt.imshow(np.reshape(img_flat,shape), cmap='gray')
         
     plt.axis('off')
     
@@ -155,18 +155,21 @@ def plot_img(img_flat, flip_color = True, savefig = ''):
         plt.savefig(savefig, format='svg')
         plt.show()
         
-def partial_removal_img(mnistimg, fraction = .5, axis = 0, half = None):
+def partial_removal_img(mnistimg, shape, fraction = .5, axis = 0, half = None):
     '''
     Corrupt (with -1 values) a portion of an input image (from the test set)
     to test if the algorithm can reconstruct it
     '''
+    # Check shape:
+    if len(shape) != 2 or (shape[0]<1 or shape[1]<1):
+        raise ValueError('The shape of an image needs two positive integer components')
     # Check type:
     if [type(mnistimg), type(fraction), type(axis)] != [np.ndarray, float, int]:
         raise TypeError('Input types not valid')
     
     # Check the shape of input image
-    if (mnistimg.shape[0] != 784):
-        raise TypeError('Input image shape does not match, need (784,)')
+    if (mnistimg.shape[0] != shape[0]*shape[1]):
+        raise TypeError(f'Input image shape does not match, need (f{shape[0]*shape[1]},)')
     
     # Axis can be either 0 (rowise deletion) or 1 (columnwise deletion)
     if not(axis in [0,1]):
@@ -177,23 +180,23 @@ def partial_removal_img(mnistimg, fraction = .5, axis = 0, half = None):
         raise ValueError('Invalid value for fraction variable (in interval [0,1])')
         
     mnistimg_corr = np.copy(mnistimg)
-    mnistimg_corr = np.reshape(mnistimg_corr, (28,28))
+    mnistimg_corr = np.reshape(mnistimg_corr, shape)
     
     if half == None:
         half = np.random.randint(2)
     
     if axis == 0:
         if half == 0:
-            mnistimg_corr[int(28*(1-fraction)):,:] = -1
+            mnistimg_corr[int(shape[0]*(1-fraction)):,:] = -1
         else:
-            mnistimg_corr[:int(28*(1-fraction)),:] = -1
+            mnistimg_corr[:int(shape[0]*(1-fraction)),:] = -1
     else:
         if half == 0:
-            mnistimg_corr[:,int(28*(1-fraction)):] = -1
+            mnistimg_corr[:,int(shape[1]*(1-fraction)):] = -1
         else:
-            mnistimg_corr[:,:int(28*(1-fraction))] = -1
+            mnistimg_corr[:,:int(shape[1]*(1-fraction))] = -1
         
-    mnistimg_corr = np.reshape(mnistimg_corr, (784,))
+    mnistimg_corr = np.reshape(mnistimg_corr, (shape[0]*shape[1],))
     
     return mnistimg_corr
 
@@ -282,7 +285,7 @@ def tneinsum2(tn1,tn2):
     
     return qtn.Tensor(data=data, inds=inds_out)
 
-def initialize_mps(Ldim = 28*28, bdim = 30, canonicalize = 1):
+def initialize_mps(Ldim, bdim = 30, canonicalize = 1):
     '''
     Initialize the MPS tensor network
     1. Create the MPS TN
@@ -290,7 +293,7 @@ def initialize_mps(Ldim = 28*28, bdim = 30, canonicalize = 1):
     3. Renaming indexes
     '''
     # Create a simple MPS network randomly initialized
-    mps = qtn.MPS_rand_state(L=Ldim, bond_dim=bdim)
+    mps = qtn.MPS_rand_state(Ldim, bond_dim=bdim)
     
     # Canonicalize: use a canonicalize value out of range to skip it (such as -1)
     if canonicalize in range(Ldim):
