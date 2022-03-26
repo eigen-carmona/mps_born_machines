@@ -76,7 +76,7 @@ def pro_profiler(func):
 #  |_____|_| MNIST FUNCTIONS
 #######################################################        
 
-def get_data(train_size = 1000, test_size = 100, grayscale_threshold = .5, small = False):
+def get_data(train_size = 1000, test_size = 100, grayscale_threshold = .5):
     '''
     Prepare the MNIST dataset for the training algorithm:
      * Choose randomly a subset from the whole dataset
