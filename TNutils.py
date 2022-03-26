@@ -101,7 +101,7 @@ def get_data(train_size = 1000, test_size = 100, grayscale_threshold = .5):
     # Check if the training_size and test_size requested are bigger than
     # the MNIST whole size
     if ( (train_size + test_size) > npmnist.shape[0] ):
-        raise ValueError('Subset too big')
+        raise ValueError('Subset too big') 
     
     # Check of the positivity of sizes
     if ( (train_size <= 0) or (test_size <= 0) ):
@@ -114,7 +114,7 @@ def get_data(train_size = 1000, test_size = 100, grayscale_threshold = .5):
     
     # Apply the mask
     npmnist = npmnist[subset_indexes]
-    
+
     # Flatten every image
     npmnist = np.reshape(npmnist, (npmnist.shape[0], npmnist.shape[1]*npmnist.shape[2]))
     
@@ -140,7 +140,7 @@ def plot_img(img_flat, shape, flip_color = True, savefig = ''):
     if -1 in img_flat:
         img_flat = np.copy(img_flat)
         img_flat[img_flat == -1] = 0
-    
+    plt.figure(figsize = (2,2))
     # Background white, strokes black
     if flip_color:
         plt.imshow(1-np.reshape(img_flat,shape), cmap='gray')
@@ -1161,3 +1161,27 @@ def load_mps_sets(foldname):
     else: test_set = None
     
     return mps, train_set, test_set
+
+def meanpool2d(npmnist, shape, grayscale_threshold = 0.3):
+    '''
+    Apply a meanpool convolution of an array of images (flattened)
+    meanpool has kernel size 2x2
+    '''
+    ds_imgs = []
+    for img in npmnist:
+        ds_img = []
+        for col in range(0,shape[0],2):
+            for row in range(0,shape[1],2):
+                pixel = np.mean([img.reshape(shape)[col,row], img.reshape(shape)[col,row+1],
+                                 img.reshape(shape)[col+1,row], img.reshape(shape)[col+1,row+1]])
+                
+                ds_img.append(pixel)
+
+        ds_imgs.append(np.array(ds_img).reshape(shape[0]//2,shape[1]//2))
+        
+    ds_imgs = np.array(ds_imgs)
+    
+    ds_imgs[ds_imgs > grayscale_threshold] = 1
+    ds_imgs[ds_imgs <= grayscale_threshold] = 0
+    
+    return ds_imgs
