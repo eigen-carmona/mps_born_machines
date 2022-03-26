@@ -1113,7 +1113,18 @@ def plot_dbonds(mps, savefig=''):
         # save the picture as svg in the location determined by savefig
         plt.savefig(savefig, format='svg')
     plt.show()
-       
+
+def bdims_imshow(mps, shape, savefig=''):
+    heat = np.append(np.array(mps.bond_sizes()),0).reshape(shape)
+    hm = plt.imshow(heat)
+    plt.colorbar(hm)
+    
+    plt.title('(Right) bond dimension for every pixel')
+    
+    if savefig != '':
+        # save the picture as svg in the location determined by savefig
+        plt.savefig(savefig, format='svg')
+    plt.show()
         
 #  __    
 # / /_   
