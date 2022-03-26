@@ -132,7 +132,7 @@ def get_data(train_size = 1000, test_size = 100, grayscale_threshold = .5):
     # Return training set and test set
     return npmnist[:train_size], npmnist[train_size:]
 
-def plot_img(img_flat, flip_color = True, savefig = ''):
+def plot_img(img_flat, shape, flip_color = True, savefig = ''):
     '''
     Display the image from the flattened form
     '''
@@ -143,10 +143,10 @@ def plot_img(img_flat, flip_color = True, savefig = ''):
     
     # Background white, strokes black
     if flip_color:
-        plt.imshow(1-np.reshape(img_flat,(28,28)), cmap='gray')
+        plt.imshow(1-np.reshape(img_flat,shape), cmap='gray')
     # Background black, strokes white
     else:
-        plt.imshow(np.reshape(img_flat,(28,28)), cmap='gray')
+        plt.imshow(np.reshape(img_flat,shape), cmap='gray')
         
     plt.axis('off')
     
