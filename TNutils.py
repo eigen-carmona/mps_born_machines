@@ -285,7 +285,7 @@ def tneinsum2(tn1,tn2):
     
     return qtn.Tensor(data=data, inds=inds_out)
 
-def initialize_mps(Ldim = 28*28, bdim = 30, canonicalize = 1):
+def initialize_mps(Ldim, bdim = 30, canonicalize = 1):
     '''
     Initialize the MPS tensor network
     1. Create the MPS TN
@@ -293,7 +293,7 @@ def initialize_mps(Ldim = 28*28, bdim = 30, canonicalize = 1):
     3. Renaming indexes
     '''
     # Create a simple MPS network randomly initialized
-    mps = qtn.MPS_rand_state(L=Ldim, bond_dim=bdim)
+    mps = qtn.MPS_rand_state(Ldim, bond_dim=bdim)
     
     # Canonicalize: use a canonicalize value out of range to skip it (such as -1)
     if canonicalize in range(Ldim):
