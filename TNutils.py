@@ -1117,7 +1117,19 @@ def plot_dbonds(mps, savefig=''):
 #| '_ \  
 #| (_) | 
 # \___(_) OTHER
-#######################################################    
+#######################################################
+
+def bars_n_stripes(N_samples, dim = 4):
+    samples = []
+    for _ in range(N_samples):
+        sample = np.zeros((dim,dim))
+        guide = np.random.random(dim+1)
+        if guide[0]<=0.5:
+            sample[guide[1:]<=0.5,:] = 1
+        else:
+            sample[:,guide[1:]<=0.5] = 1
+        samples.append(sample)
+    return samples
 
 def save_mps_sets(mps, train_set, foldname, test_set = []):
     # If folder does not exists
