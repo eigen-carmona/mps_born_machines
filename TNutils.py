@@ -289,7 +289,7 @@ def initialize_mps(Ldim = 28*28, bdim = 30, canonicalize = 1):
     3. Renaming indexes
     '''
     # Create a simple MPS network randomly initialized
-    mps = qtn.MPS_rand_state(L=Ldim, bond_dim=bdim)
+    mps = qtn.MPS_rand_state(n=Ldim, bond_dim=bdim)
     
     # Canonicalize: use a canonicalize value out of range to skip it (such as -1)
     if canonicalize in range(Ldim):
@@ -732,7 +732,48 @@ def learning_epoch_sgd(mps, imgs, epochs, lr, batch_size = 25):
 
     # cha cha real smooth
 
-def learning_step_cached(mps, index, _imgs, lr, img_cache, going_right = True, **kwargs):
+def stochastic_cache_update(mps,_imgs,img_cache,last_dirs,last_sites,last_epochs,mask,going_right,curr_epoch,curr_site):
+    '''
+    each last_x array is a size len(img_cache) array which specifies x for the last update of the image at the given position
+    last_dir: specifices the direction we were heading when we last updated each image cache
+    last_site: specifies the last index site for which we updated the image cache
+    last_epoch: specifies the epoch during which we last updated the image cache
+    mask: mask array of images whose cache we wish to use.
+    '''
+    for index in mask:
+        _img = _imgs[index]
+        left_cache, right_cache = img_cache[index]
+        last_epoch = last_epochs[index]
+        went_right = last_dirs[index]
+        last_site = last_sites[index]
+        if curr_epoch > last_epoch:#(curr_epoch assumed to be >= last_epoch)
+            if last_epoch == -1:
+                left_cache, right_cache = restart_cache(mps, curr_site, left_cache, right_cache, _img)
+            elif (curr_epoch == last_epoch + 1) and (going_right>went_right):
+                # (It is assumed that the first stage is going right, and the second, going left)
+                # If we are in the first stage of the current epoch,
+                # and we were at the second stage of the last one,
+                # we build the left cache from the initial site,
+                # and correspondingly rescale the right cache, which is still useful.
+                left_cache, right_cache = half_cache(mps,right_cache,left_cache,last_site,curr_site,going_right,_img)
+            else:
+                # In this scenario, we must recreate everything
+                left_cache, right_cache = restart_cache(mps, curr_site, left_cache, right_cache, _img)
+        elif going_right<went_right:
+            # (we cannot be in the same epoch and going right if last time we were going left)
+            # We're then in the same epoch
+            # if we're now going left and were going right, we need to create the right cache from the last site
+            # and correspondingly rescale the left cache, which is still useful
+            left_cache, right_cache = half_cache(mps,right_cache,left_cache,last_site,curr_site,going_right,_img)
+        else: # We're then going in the same direction as last time
+            # So we must grow the corresponding site and shorten the other
+            left_cache, right_cache = advance_cache(mps,left_cache, right_cache, going_right,curr_site,last_site,_img)
+        last_sites[index] = curr_site
+        last_epochs[index] = curr_epoch
+        last_dirs[index] = going_right
+        img_cache[index] = left_cache, right_cache
+
+def learning_step_cached(mps, index, _imgs, lr, img_cache, _img_cache, going_right = True, **kwargs):
     '''
     Compute the updated merged tensor A_{index,index+1}
     
@@ -747,12 +788,23 @@ def learning_step_cached(mps, index, _imgs, lr, img_cache, going_right = True, *
     # the data-dependent terms
     psifrac = 0
     
-    for _img,cacha in zip(_imgs,img_cache):
+    for _img,cacha,_cache in zip(_imgs,img_cache,_img_cache):
+        _L,_R = _cache
         L, R = cacha
         left = tneinsum2(L[index],_img[index])
         right = tneinsum2(R[index+1],_img[index+1])
         num = tneinsum2(left,right)
         den = qtn.tensor_contract(num,A)
+        #print(R[index+1])
+        #print(_R[index+1])
+        if not np.allclose(L[index].data,_L[index].data):
+            print(f"Lefties don't match: {L[index]}, {_L[index]}")
+            #raise Exception()
+        if not np.allclose(R[index+1].data,_R[index+1].data):
+            print(f"Righties don't match, site {index+1} {R[index+1]}, {_R[index+1]}")
+            #raise Exception()
+        _den = qtn.tensor_contract(_L[index],_R[index+1],_img[index],_img[index+1],A)
+        print(index,den,_den)
 
         # Theoretically the two computations above can be optimized in a single function
         # because we are contracting the very same tensors for the most part
@@ -793,7 +845,7 @@ def learning_step_cached(mps, index, _imgs, lr, img_cache, going_right = True, *
     # SD.tensors[1] -> I_{index+1}
     return SD
 
-def learning_epoch_cached(mps, _imgs, epochs, lr,img_cache,batch_size = 25,**kwargs):
+def learning_epoch_cached(mps, _imgs, epochs, lr,img_cache,_img_cache,last_dirs,last_sites,last_epochs,batch_size = 25,**kwargs):
     '''
     Manages the sliding left and right.
     From tensor 1 (the second), apply learning_step() sliding to the right
@@ -814,7 +866,10 @@ def learning_epoch_cached(mps, _imgs, epochs, lr,img_cache,batch_size = 25,**kwa
         for index in progress:
             np.random.shuffle(guide)
             mask = guide[:batch_size]
-            A = learning_step_cached(mps,index,_imgs[mask],lr,img_cache[mask],going_right,**kwargs)
+            # Update stoch_cache
+            stochastic_cache_update(mps,_imgs,_img_cache,last_dirs,last_sites,last_epochs,mask,going_right,epoch,index)
+
+            A = learning_step_cached(mps,index,_imgs[mask],lr,img_cache[mask],_img_cache[mask],going_right,**kwargs)
             if index == 0:
                 mps.tensors[index].modify(data=np.transpose(A.tensors[0].data,(1,0)))
                 mps.tensors[index+1].modify(data=A.tensors[1].data)
@@ -824,11 +879,11 @@ def learning_epoch_cached(mps, _imgs, epochs, lr,img_cache,batch_size = 25,**kwa
 
             # Update the cache for all images (for all? really?)
             for i,cache in enumerate(img_cache):
-                if going_right:
+                if going_right or index == 1:
                     # updating left
                     left = tneinsum2(mps[index],cache[0][index])
                     img_cache[i][0][index+1] = tneinsum2(left,_imgs[i][index])
-                else:
+                if not going_right or index == len(mps.tensors)-2:
                     # updating right
                     right = tneinsum2(mps[index+1],cache[1][index+1])
                     img_cache[i][1][index] = tneinsum2(right,_imgs[i][index+1])
@@ -840,45 +895,6 @@ def learning_epoch_cached(mps, _imgs, epochs, lr,img_cache,batch_size = 25,**kwa
     
     print('NLL: {} | Baseline: {}'.format(computeNLL_cached(mps, _imgs, img_cache,0), np.log(len(_imgs)) ) )
     # cha cha real smooth
-
-def stochastic_cache_update(mps,_imgs,img_cache,last_dirs,last_sites,last_epochs,mask,going_right,curr_epoch,curr_site):
-    '''
-    each last_x array is a size len(img_cache) array which specifies x for the last update of the image at the given position
-    last_dir: specifices the direction we were heading when we last updated each image cache
-    last_site: specifies the last index site for which we updated the image cache
-    last_epoch: specifies the epoch during which we last updated the image cache
-    mask: mask array of images whose cache we wish to use.
-    '''
-    for index in mask:
-        _img = _imgs[index]
-        left_cache, right_cache = img_cache[index]
-        last_epoch = last_epochs[index]
-        went_right = last_dirs[index]
-        last_site = last_sites[index]
-        if curr_epoch > last_epoch:#(curr_epoch assumed to be >= last_epoch)
-            if (curr_epoch == last_epoch + 1) and (going_right>went_right):
-                # (It is assumed that the first stage is going right, and the second, going left)
-                # If we are in the first stage of the current epoch,
-                # and we were at the second stage of the last one,
-                # we build the left cache from the initial site,
-                # and correspondingly rescale the right cache, which is still useful.
-                half_cache(mps,right_cache,left_cache,last_site,curr_site,going_right,_img)
-            else:
-                # In this scenario, we must recreate everything
-                restart_cache(mps, curr_site, left_cache, right_cache, _img)
-        elif going_right<went_right:
-            # (we cannot be in the same epoch and going right if last time we were going left)
-            # We're then in the same epoch
-            # if we're now going left and were going right, we need to create the right cache from the last site
-            # and correspondingly rescale the left cache, which is still useful
-            half_cache(mps,right_cache,left_cache,last_site,curr_site,going_right,_img)
-        else: # We're then going in the same direction as last time
-            # So we must grow the corresponding site and shorten the other
-            advance_cache(mps,left_cache, right_cache, going_right,curr_site,last_site,_img)
-        last_sites[index] = curr_site
-        last_epochs[index] = curr_epoch
-        last_dirs[index] = going_right
-        img_cache[index] = left_cache, right_cache
 
 def restart_cache(mps,site,left_cache,right_cache,_img):
     left_site = site
@@ -893,7 +909,7 @@ def advance_cache(mps,left_cache,right_cache,going_right,curr_site,last_site,_im
         left_cache[last_site:curr_site+1] = extend_cache(mps,state,_img,last_site,curr_site)
     else:
         state = right_cache[last_site+1]
-        right_cache[curr_site+1:last_site+1] = np.flip(extend_cache(mps,state,_img,last_site,curr_site+1))
+        right_cache[curr_site+1:last_site+2] = np.flip(extend_cache(mps,state,_img,last_site+1,curr_site+1))
     return left_cache, right_cache
 
 def extend_cache(mps,base,_img,start,end):
@@ -917,7 +933,7 @@ def half_cache(mps,right_cache,left_cache,last_site,curr_site,going_right,_img):
         left_cache[:curr_site+1] = extend_cache(mps,qtn.Tensor(),_img,0,curr_site)
         if curr_site < last_site:
             state = right_cache[last_site+1]
-            right_cache[curr_site+1:last_site+1] = np.flip(extend_cache(mps,state,_img,last_site,curr_site+1))
+            right_cache[curr_site+1:last_site+2] = np.flip(extend_cache(mps,state,_img,last_site+1,curr_site+1))
     else:
         # We were going right and are now going left. Restart right cache
         right_cache[curr_site+1:] = np.flip(extend_cache(mps,qtn.Tensor(),_img,len(_img)-1,curr_site+1))
@@ -1162,16 +1178,14 @@ def reconstruct(mps, corr_img):
     utn.cyclic = rec_mps.cyclic
     utn._L = len(utn.tensors)
     utn._site_tag_id = 'U{}'
-    
+
     utn.left_canonize()
-    
+
     # Generate from the unknown pixels network
     reconstruction = generate_sample(utn, reconstruct = True)
-    
+
     rec_img = copy.copy(corr_img)
     rec_img[rec_img == -1] = reconstruction
-    
+
     return rec_img
-    
-    
-    
+
