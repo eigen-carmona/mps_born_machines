@@ -447,76 +447,165 @@ def computepsiprime(mps, img, contracted_left_index):
     if pixel is 1 -> state = [1,0]
     '''
     
-    #############
-    # LEFT PART #
-    #############
+    if contracted_left_index == 0:
+        ##############
+        # RIGHT PART #
+        ##############
+
+        # Right most tensor
+        #          ---O
+        # Compute     |  => --O
+        #             O
+        if img[-1] == 0:
+            contraction_dx = np.einsum('a,ba',[0,1], mps.tensors[-1].data)
+        else:
+            contraction_dx = np.einsum('a,ba',[1,0], mps.tensors[-1].data)
+
+        for k in range(len(mps.tensors)-2, contracted_left_index+1, -1):
+            #  
+            # Compute  --O--O  => --O
+            #               |       |
+
+            contraction_dx = np.einsum('a,bac->bc',contraction_dx, mps.tensors[k].data)
+
+            #          --O
+            # Compute    |  => --O
+            #            O        
+            if img[k] == 0:
+                contraction_dx = np.einsum('a,ba', [0,1], contraction_dx)
+            else:
+                contraction_dx = np.einsum('a,ba', [1,0], contraction_dx)
+                
+        # From here on it is just speculation
+
+        if img[contracted_left_index] == 0:
+            v0 = [0,1]
+        else:
+            v0 = [1,0]
+
+        if img[contracted_left_index+1] == 0:
+            contraction_dx = np.einsum('a,k->ak', contraction_dx, [0,1])
+        else:
+            contraction_dx = np.einsum('a,k->ak', contraction_dx, [1,0])
+
+        contraction = np.einsum('a,cd->acd', v0, contraction_dx)
+
+        return contraction
     
-    # Left most tensor
-    #          O--
-    # Compute  |  => O--
-    #          O
-    if img[0] == 0:
-        contraction_sx = np.einsum('a,ba',[0,1], mps.tensors[0].data)
-    else:
-        contraction_sx = np.einsum('a,ba',[1,0], mps.tensors[0].data)
-        
-    for k in range(1, contracted_left_index):
-        #  
-        # Compute  O--O--  => O--
-        #             |       |
-        contraction_sx = np.einsum('a,abc->bc',contraction_sx, mps.tensors[k].data)
-        
+    elif contracted_left_index == len(mps.tensors) - 2:
+        #############
+        # LEFT PART #
+        #############
+
+        # Left most tensor
         #          O--
         # Compute  |  => O--
-        #          O        
-        if img[k] == 0:
-            contraction_sx = np.einsum('a,ba', [0,1], contraction_sx)
+        #          O
+        if img[0] == 0:
+            contraction_sx = np.einsum('a,ba',[0,1], mps.tensors[0].data)
         else:
-            contraction_sx = np.einsum('a,ba', [1,0], contraction_sx)
-    
-    ##############
-    # RIGHT PART #
-    ##############
-    
-    # Right most tensor
-    #          ---O
-    # Compute     |  => --O
-    #             O
-    if img[-1] == 0:
-        contraction_dx = np.einsum('a,ba',[0,1], mps.tensors[-1].data)
-    else:
-        contraction_dx = np.einsum('a,ba',[1,0], mps.tensors[-1].data)
+            contraction_sx = np.einsum('a,ba',[1,0], mps.tensors[0].data)
+
+        for k in range(1, contracted_left_index):
+            #  
+            # Compute  O--O--  => O--
+            #             |       |
+            contraction_sx = np.einsum('a,abc->bc',contraction_sx, mps.tensors[k].data)
+
+            #          O--
+            # Compute  |  => O--
+            #          O        
+            if img[k] == 0:
+                contraction_sx = np.einsum('a,ba', [0,1], contraction_sx)
+            else:
+                contraction_sx = np.einsum('a,ba', [1,0], contraction_sx)
         
-    for k in range(len(mps.tensors)-2, contracted_left_index+1, -1):
-        #  
-        # Compute  --O--O  => --O
-        #               |       |
-        
-        contraction_dx = np.einsum('a,bac->bc',contraction_dx, mps.tensors[k].data)
-        
-        #          --O
-        # Compute    |  => --O
-        #            O        
-        if img[k] == 0:
-            contraction_dx = np.einsum('a,ba', [0,1], contraction_dx)
+        # From here on it is just speculation
+
+        if img[contracted_left_index] == 0:
+            contraction_sx = np.einsum('a,k->ak', contraction_sx, [0,1])
         else:
-            contraction_dx = np.einsum('a,ba', [1,0], contraction_dx)
-    
-    # From here on it is just speculation
-    
-    if img[contracted_left_index] == 0:
-        contraction_sx = np.einsum('a,k->ak', contraction_sx, [0,1])
+            contraction_sx = np.einsum('a,k->ak', contraction_sx, [1,0])
+
+        if img[contracted_left_index+1] == 0:
+            vm1 = [0,1]
+        else:
+            vm1 = [1,0]
+
+        contraction = np.einsum('ab,c->abc', contraction_sx, vm1)
+
+        return contraction
     else:
-        contraction_sx = np.einsum('a,k->ak', contraction_sx, [1,0])
-        
-    if img[contracted_left_index+1] == 0:
-        contraction_dx = np.einsum('a,k->ak', contraction_dx, [0,1])
-    else:
-        contraction_dx = np.einsum('a,k->ak', contraction_dx, [1,0])
-    
-    contraction = np.einsum('ab,cd->abcd', contraction_sx, contraction_dx)
-    
-    return contraction
+        #############
+        # LEFT PART #
+        #############
+
+        # Left most tensor
+        #          O--
+        # Compute  |  => O--
+        #          O
+        if img[0] == 0:
+            contraction_sx = np.einsum('a,ba',[0,1], mps.tensors[0].data)
+        else:
+            contraction_sx = np.einsum('a,ba',[1,0], mps.tensors[0].data)
+
+        for k in range(1, contracted_left_index):
+            #  
+            # Compute  O--O--  => O--
+            #             |       |
+            contraction_sx = np.einsum('a,abc->bc',contraction_sx, mps.tensors[k].data)
+
+            #          O--
+            # Compute  |  => O--
+            #          O        
+            if img[k] == 0:
+                contraction_sx = np.einsum('a,ba', [0,1], contraction_sx)
+            else:
+                contraction_sx = np.einsum('a,ba', [1,0], contraction_sx)
+
+        ##############
+        # RIGHT PART #
+        ##############
+
+        # Right most tensor
+        #          ---O
+        # Compute     |  => --O
+        #             O
+        if img[-1] == 0:
+            contraction_dx = np.einsum('a,ba',[0,1], mps.tensors[-1].data)
+        else:
+            contraction_dx = np.einsum('a,ba',[1,0], mps.tensors[-1].data)
+
+        for k in range(len(mps.tensors)-2, contracted_left_index+1, -1):
+            #  
+            # Compute  --O--O  => --O
+            #               |       |
+
+            contraction_dx = np.einsum('a,bac->bc',contraction_dx, mps.tensors[k].data)
+
+            #          --O
+            # Compute    |  => --O
+            #            O        
+            if img[k] == 0:
+                contraction_dx = np.einsum('a,ba', [0,1], contraction_dx)
+            else:
+                contraction_dx = np.einsum('a,ba', [1,0], contraction_dx)
+
+        # From here on it is just speculation
+
+        if img[contracted_left_index] == 0:
+            contraction_sx = np.einsum('a,k->ak', contraction_sx, [0,1])
+        else:
+            contraction_sx = np.einsum('a,k->ak', contraction_sx, [1,0])
+
+        if img[contracted_left_index+1] == 0:
+            contraction_dx = np.einsum('a,k->ak', contraction_dx, [0,1])
+        else:
+            contraction_dx = np.einsum('a,k->ak', contraction_dx, [1,0])
+
+        contraction = np.einsum('ab,cd->abcd', contraction_sx, contraction_dx)
+
+        return contraction
 
 def psi_primed(mps,_img,index):
     # quimby contraction. Currently not faster than einsum implementation
@@ -622,7 +711,7 @@ def compress_copy(mps, max_bond):
 #  |____(_) LEARNING FUNCTIONS
 #######################################################        
 
-def learning_step(mps, index, imgs, lr, going_right = True):
+def learning_step(mps, index, imgs, lr, going_right = True, **kwargs):
     '''
     Compute the updated merged tensor A_{index,index+1}
     
@@ -644,8 +733,11 @@ def learning_step(mps, index, imgs, lr, going_right = True):
         # 'ijkl,ilkj' or 'ijkl,ijkl'?
         # computepsiprime was coded so that the ordering of the indexes is the same
         # as the contraction A = mps.tensors[index] @ mps.tensors[index+1]
-        # so it should be the second one    
-        den = np.einsum('ijkl,ijkl',A.data,num) # PSI(v)
+        # so it should be the second one
+        if index == 0 or index == len(mps.tensors)-2:
+            den = np.einsum('ijk,ijk',A.data,num)
+        else:
+            den = np.einsum('ijkl,ijkl',A.data,num) # PSI(v)
         
         # Theoretically the two computations above can be optimized in a single function
         # because we are contracting the very same tensors for the most part
@@ -658,7 +750,7 @@ def learning_step(mps, index, imgs, lr, going_right = True):
     dNLL = (A/Z) - psifrac
     
     A = A + lr*dNLL # Update A_{i,i+1}
-    
+    A = A/np.sqrt( tneinsum2(A,A).data )
     # Now the tensor A_{i,i+1} must be split in I_k and I_{k+1}.
     # To preserve canonicalization:
     # > if we are merging sliding towards the RIGHT we need to absorb right
@@ -670,17 +762,23 @@ def learning_step(mps, index, imgs, lr, going_right = True):
     #
     if going_right:
         # FYI: split method does apply SVD by default
-        # there are variations of svd that can be inspected 
+        # there are variations of svd that can be inspected
         # for a performance boost
-        SD = A.split(['i'+str(index-1),'v'+str(index)], absorb='right')
+        if index == 0:
+            SD = A.split(['v'+str(index)], absorb='right', **kwargs)
+        else:
+            SD = A.split(['i'+str(index-1),'v'+str(index)], absorb='right',**kwargs)
     else:
-        SD = A.split(['i'+str(index-1),'v'+str(index)], absorb='left')
+        if index == 0:
+            SD = A.split(['v'+str(index)], absorb='left', **kwargs)
+        else:
+            SD = A.split(['i'+str(index-1),'v'+str(index)], absorb='left',**kwargs)
        
     # SD.tensors[0] -> I_{index}
     # SD.tensors[1] -> I_{index+1}
     return SD
 
-def learning_epoch_sgd(mps, imgs, epochs, lr, batch_size = 25):
+def learning_epoch_sgd(mps, imgs, epochs, lr, batch_size = 25,**kwargs):
     '''
     Manages the sliding left and right.
     From tensor 1 (the second), apply learning_step() sliding to the right
@@ -695,7 +793,8 @@ def learning_epoch_sgd(mps, imgs, epochs, lr, batch_size = 25):
     # psi_primed is compatible with this
     # however, computepsiprime only works with:
     # [1,2,...,780,781,780,...,2,1]
-    progress = tq.tqdm([i for i in range(1,len(mps.tensors)-2)] + [i for i in range(len(mps.tensors)-3,0,-1)], leave=True)
+    #progress = tq.tqdm([i for i in range(1,len(mps.tensors)-2)] + [i for i in range(len(mps.tensors)-3,0,-1)], leave=True)
+    progress = tq.tqdm([i for i in range(0,len(mps.tensors)-1)] + [i for i in range(len(mps.tensors)-2,-1,-1)], leave=True)
 
     # Firstly we slide right
     going_right = True
@@ -703,14 +802,17 @@ def learning_epoch_sgd(mps, imgs, epochs, lr, batch_size = 25):
         np.random.shuffle(guide)
         mask = guide[:batch_size]
         A = learning_step(mps,index,imgs[mask],lr, going_right)
-
-        mps.tensors[index].modify(data=np.transpose(A.tensors[0].data,(0,2,1)))
-        mps.tensors[index+1].modify(data=A.tensors[1].data)
+        if index == 0:
+            mps.tensors[index].modify(data=np.transpose(A.tensors[0].data,(1,0)))
+            mps.tensors[index+1].modify(data=A.tensors[1].data)
+        else:
+            mps.tensors[index].modify(data=np.transpose(A.tensors[0].data,(0,2,1)))
+            mps.tensors[index+1].modify(data=A.tensors[1].data)
 
         #p0 = computepsi(mps,imgs[0])**2
         progress.set_description('Left Index: {}'.format(index))
 
-        if index == len(mps.tensors)-3:
+        if index == len(mps.tensors)-2:
             going_right = False
 
     # cha cha real smooth
@@ -746,7 +848,7 @@ def learning_step_cached(mps, index, _imgs, lr, img_cache, going_right = True, *
 
     # Derivative of the NLL
     dNLL = (A/Z) - psifrac
-
+    
     A = A + lr*dNLL # Update A_{i,i+1}
     A = A/np.sqrt( tneinsum2(A,A).data )
     # Now the tensor A_{i,i+1} must be split in I_k and I_{k+1}.
@@ -1189,7 +1291,7 @@ def meanpool2d(npmnist, shape, grayscale_threshold = 0.3):
                 
                 ds_img.append(pixel)
 
-        ds_imgs.append(np.array(ds_img).reshape(shape[0]//2,shape[1]//2))
+        ds_imgs.append(np.array(ds_img).reshape((shape[0]//2)*(shape[1]//2)) )
         
     ds_imgs = np.array(ds_imgs)
     
