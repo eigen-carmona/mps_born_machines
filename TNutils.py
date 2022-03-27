@@ -910,11 +910,11 @@ def learning_epoch_cached(mps, _imgs, epochs, lr,img_cache,batch_size = 25,**kwa
 
             # Update the cache for all images (for all? really?)
             for i,cache in enumerate(img_cache):
-                if going_right or index == 1:
+                if going_right:
                     # updating left
                     left = tneinsum2(mps[index],cache[0][index])
                     img_cache[i][0][index+1] = tneinsum2(left,_imgs[i][index])
-                if not going_right or index == len(mps.tensors)-2:
+                else:
                     # updating right
                     right = tneinsum2(mps[index+1],cache[1][index+1])
                     img_cache[i][1][index] = tneinsum2(right,_imgs[i][index+1])
