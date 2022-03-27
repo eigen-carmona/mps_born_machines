@@ -812,7 +812,7 @@ def learning_epoch_sgd(mps, imgs, epochs, lr, batch_size = 25,**kwargs):
         #p0 = computepsi(mps,imgs[0])**2
         progress.set_description('Left Index: {}'.format(index))
 
-        if index == len(mps.tensors)-3:
+        if index == len(mps.tensors)-2:
             going_right = False
 
     # cha cha real smooth
