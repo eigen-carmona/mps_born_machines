@@ -748,7 +748,7 @@ def learning_step_cached(mps, index, _imgs, lr, img_cache, going_right = True, *
     dNLL = (A/Z) - psifrac
 
     A = A + lr*dNLL # Update A_{i,i+1}
-
+    A = A/np.sqrt( tneinsum2(A,A).data )
     # Now the tensor A_{i,i+1} must be split in I_k and I_{k+1}.
     # To preserve canonicalization:
     # > if we are merging sliding towards the RIGHT we need to absorb right
@@ -790,8 +790,9 @@ def learning_epoch_cached(mps, _imgs, epochs, lr,img_cache,batch_size = 25,**kwa
         print('NLL: {} | Baseline: {}'.format(computeNLL_cached(mps, _imgs, img_cache, 0), np.log(len(_imgs)) ) )
         print(f'epoch {epoch+1}/{epochs}')
         # [1,2,...,780,781,780,...,2,1]
-        progress = tq.tqdm([i for i in range(0,len(mps.tensors)-1)] + [i for i in range(len(mps.tensors)-3,0,-1)], leave=True)
+        #progress = tq.tqdm([i for i in range(0,len(mps.tensors)-1)] + [i for i in range(len(mps.tensors)-3,0,-1)], leave=True)
         #progress = tq.tqdm([i for i in range(1,len(mps.tensors)-2)] + [i for i in range(len(mps.tensors)-3,0,-1)], leave=True)
+        progress = tq.tqdm([i for i in range(0,len(mps.tensors)-1)] + [i for i in range(len(mps.tensors)-2,-1,-1)], leave=True)
 
         going_right = True
         for index in progress:
