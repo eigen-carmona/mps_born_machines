@@ -1014,6 +1014,51 @@ def learning_epoch_cached(mps, _imgs, epochs, lr,img_cache,batch_size = 25,**kwa
     print('NLL: {} | Baseline: {}'.format(computeNLL_cached(mps, _imgs, img_cache,0), np.log(len(_imgs)) ) )
     # cha cha real smooth
 
+def cached_stochastic_learning_epoch(mps, _imgs, epochs, lr,img_cache,last_dirs,last_sites,last_epochs,batch_size = 25,**kwargs):
+    '''
+    Manages the sliding left and right.
+    From tensor 1 (the second), apply learning_step() sliding to the right
+    At tensor max-2, apply learning_step() sliding to the left back to tensor 1
+    '''
+    # We expect, however, that the batch size is smaler than the input set
+    batch_size = min(len(_imgs),batch_size)
+    guide = np.arange(len(_imgs))
+    cost = []
+    # Execute the epochs
+    for epoch in range(epochs):
+        print(f'epoch {epoch+1}/{epochs}')
+        # [1,2,...,780,781,780,...,2,1]
+        #progress = tq.tqdm([i for i in range(0,len(mps.tensors)-1)] + [i for i in range(len(mps.tensors)-3,0,-1)], leave=True)
+        #progress = tq.tqdm([i for i in range(1,len(mps.tensors)-2)] + [i for i in range(len(mps.tensors)-3,0,-1)], leave=True)
+        progress = tq.tqdm([i for i in range(0,len(mps.tensors)-1)] + [i for i in range(len(mps.tensors)-2,-1,-1)], leave=True)
+
+        going_right = True
+        for index in progress:
+            np.random.shuffle(guide)
+            mask = guide[:batch_size]
+            # Update stoch_cache
+            stochastic_cache_update(mps,_imgs,img_cache,last_dirs,last_sites,last_epochs,mask,going_right,epoch,index)
+
+            A = learning_step_cached(mps,index,_imgs[mask],lr,img_cache[mask],going_right,**kwargs)
+            if index == 0:
+                mps.tensors[index].modify(data=np.transpose(A.tensors[0].data,(1,0)))
+                mps.tensors[index+1].modify(data=A.tensors[1].data)
+            else:
+                mps.tensors[index].modify(data=np.transpose(A.tensors[0].data,(0,2,1)))
+                mps.tensors[index+1].modify(data=A.tensors[1].data)
+
+            #p0 = computepsi(mps,imgs[0])**2
+            progress.set_description('Left Index: {}'.format(index))
+
+            if index == len(mps.tensors)-2:
+                going_right = False
+
+        nll = computeNLL_cached(mps, _imgs, img_cache, 0)
+        cost.append(nll)
+        print('NLL: {} | Baseline: {}'.format(nll, np.log(len(_imgs)) ) )
+    return cost
+    # cha cha real smooth
+
 #   _  _    
 #  | || |   
 #  | || |_  
