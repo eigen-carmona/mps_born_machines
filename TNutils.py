@@ -35,6 +35,7 @@ import collections
 import opt_einsum as oe
 import itertools
 import copy
+import os
 #######################################################
 
 '''
@@ -100,7 +101,7 @@ def get_data(train_size = 1000, test_size = 100, grayscale_threshold = .5):
     # Check if the training_size and test_size requested are bigger than
     # the MNIST whole size
     if ( (train_size + test_size) > npmnist.shape[0] ):
-        raise ValueError('Subset too big')
+        raise ValueError('Subset too big') 
     
     # Check of the positivity of sizes
     if ( (train_size <= 0) or (test_size <= 0) ):
@@ -113,7 +114,7 @@ def get_data(train_size = 1000, test_size = 100, grayscale_threshold = .5):
     
     # Apply the mask
     npmnist = npmnist[subset_indexes]
-    
+
     # Flatten every image
     npmnist = np.reshape(npmnist, (npmnist.shape[0], npmnist.shape[1]*npmnist.shape[2]))
     
@@ -131,7 +132,7 @@ def get_data(train_size = 1000, test_size = 100, grayscale_threshold = .5):
     # Return training set and test set
     return npmnist[:train_size], npmnist[train_size:]
 
-def plot_img(img_flat, flip_color = True, savefig = ''):
+def plot_img(img_flat, shape, flip_color = True, savefig = ''):
     '''
     Display the image from the flattened form
     '''
@@ -139,13 +140,13 @@ def plot_img(img_flat, flip_color = True, savefig = ''):
     if -1 in img_flat:
         img_flat = np.copy(img_flat)
         img_flat[img_flat == -1] = 0
-    
+    plt.figure(figsize = (2,2))
     # Background white, strokes black
     if flip_color:
-        plt.imshow(1-np.reshape(img_flat,(28,28)), cmap='gray')
+        plt.imshow(1-np.reshape(img_flat,shape), cmap='gray')
     # Background black, strokes white
     else:
-        plt.imshow(np.reshape(img_flat,(28,28)), cmap='gray')
+        plt.imshow(np.reshape(img_flat,shape), cmap='gray')
         
     plt.axis('off')
     
@@ -154,18 +155,21 @@ def plot_img(img_flat, flip_color = True, savefig = ''):
         plt.savefig(savefig, format='svg')
         plt.show()
         
-def partial_removal_img(mnistimg, fraction = .5, axis = 0, half = None):
+def partial_removal_img(mnistimg, shape, fraction = .5, axis = 0, half = None):
     '''
     Corrupt (with -1 values) a portion of an input image (from the test set)
     to test if the algorithm can reconstruct it
     '''
+    # Check shape:
+    if len(shape) != 2 or (shape[0]<1 or shape[1]<1):
+        raise ValueError('The shape of an image needs two positive integer components')
     # Check type:
     if [type(mnistimg), type(fraction), type(axis)] != [np.ndarray, float, int]:
         raise TypeError('Input types not valid')
     
     # Check the shape of input image
-    if (mnistimg.shape[0] != 784):
-        raise TypeError('Input image shape does not match, need (784,)')
+    if (mnistimg.shape[0] != shape[0]*shape[1]):
+        raise TypeError(f'Input image shape does not match, need (f{shape[0]*shape[1]},)')
     
     # Axis can be either 0 (rowise deletion) or 1 (columnwise deletion)
     if not(axis in [0,1]):
@@ -176,23 +180,23 @@ def partial_removal_img(mnistimg, fraction = .5, axis = 0, half = None):
         raise ValueError('Invalid value for fraction variable (in interval [0,1])')
         
     mnistimg_corr = np.copy(mnistimg)
-    mnistimg_corr = np.reshape(mnistimg_corr, (28,28))
+    mnistimg_corr = np.reshape(mnistimg_corr, shape)
     
     if half == None:
         half = np.random.randint(2)
     
     if axis == 0:
         if half == 0:
-            mnistimg_corr[int(28*(1-fraction)):,:] = -1
+            mnistimg_corr[int(shape[0]*(1-fraction)):,:] = -1
         else:
-            mnistimg_corr[:int(28*(1-fraction)),:] = -1
+            mnistimg_corr[:int(shape[0]*(1-fraction)),:] = -1
     else:
         if half == 0:
-            mnistimg_corr[:,int(28*(1-fraction)):] = -1
+            mnistimg_corr[:,int(shape[1]*(1-fraction)):] = -1
         else:
-            mnistimg_corr[:,:int(28*(1-fraction))] = -1
+            mnistimg_corr[:,:int(shape[1]*(1-fraction))] = -1
         
-    mnistimg_corr = np.reshape(mnistimg_corr, (784,))
+    mnistimg_corr = np.reshape(mnistimg_corr, (shape[0]*shape[1],))
     
     return mnistimg_corr
 
@@ -281,7 +285,7 @@ def tneinsum2(tn1,tn2):
     
     return qtn.Tensor(data=data, inds=inds_out)
 
-def initialize_mps(Ldim = 28*28, bdim = 30, canonicalize = 1):
+def initialize_mps(Ldim, bdim = 30, canonicalize = 1):
     '''
     Initialize the MPS tensor network
     1. Create the MPS TN
@@ -289,7 +293,7 @@ def initialize_mps(Ldim = 28*28, bdim = 30, canonicalize = 1):
     3. Renaming indexes
     '''
     # Create a simple MPS network randomly initialized
-    mps = qtn.MPS_rand_state(n=Ldim, bond_dim=bdim)
+    mps = qtn.MPS_rand_state(Ldim, bond_dim=bdim)
     
     # Canonicalize: use a canonicalize value out of range to skip it (such as -1)
     if canonicalize in range(Ldim):
@@ -316,7 +320,7 @@ def initialize_mps(Ldim = 28*28, bdim = 30, canonicalize = 1):
     
     # Reindexing the last tensor
     tensor = tensor + 1
-    mps = mps.reindex({mps.tensors[tensor].inds[0]: 'i'+str(tensor), 
+    mps = mps.reindex({mps.tensors[tensor].inds[0]: 'i'+str(tensor-1),
                        mps.tensors[tensor].inds[1]: 'v'+str(tensor)})  
     
     return mps
@@ -531,7 +535,7 @@ def psi_primed(mps,_img,index):
     psi_p = contr_L@_img[index]@_img[index+1]@contr_R
     return psi_p
 
-def computeNLL(mps, imgs):
+def computeNLL(mps, imgs, canonicalized_index = False):
     '''
     Computes the Negative Log Likelihood of a Tensor Network (mps)
     over a set of images (imgs)
@@ -539,12 +543,17 @@ def computeNLL(mps, imgs):
      > NLL = -(1/|T|) * SUM_{v\in T} ( ln P(v) ) = -(1/|T|) * SUM_{v\in T} ( ln psi(v)**2 )
            = -(2/|T|) * SUM_{v\in T} ( ln |psi(v)| )
     '''
-    
-    lnsum = 0
+     
+    if not canonicalized_index:
+        Z = mps @ mps
+    else:
+        Z = tneinsum2(mps.tensors[canonicalized_index], mps.tensors[canonicalized_index]).data
+        
+    lnsum = 0   
     for img in imgs:
         lnsum = lnsum + np.log( abs(computepsi(mps,img)) )
         
-    return - 2 * lnsum / imgs.shape[0]
+    return - 2 * (lnsum / imgs.shape[0]) + np.log(Z)
 
 def computeNLL_cached(mps, _imgs, img_cache, index):
 
@@ -558,9 +567,53 @@ def computeNLL_cached(mps, _imgs, img_cache, index):
         right = tneinsum2(R[index+1],_img[index+1])
         psiprime = tneinsum2(left,right)
         logpsi = logpsi + np.log(np.abs(qtn.tensor_contract(psiprime,A)))
+    #             __    _        _         __  _    _           _        _
+    # NLL = - _1_ \  ln|  _P(V)_  | = -_1_ \  |  ln| |Psi(v)|^2  | - lnZ  |
+    #         |T| /_   |_   Z    _|    |T| /_ |_   |_           _|       _|
+    #             _  __                      _         __
+    #     = -_1_ | 2 \  ln|Psi(v)| - |T|lnZ   | = -_2_ \  ln|Psi(v)|  - lnZ
+    #        |T| |_  /_                      _|    |T| /_
+    
+    return - (2/len(_imgs)) * logpsi + np.log(Z)
 
+def compress(mps, max_bond):
+    
+    for index in range(len(mps.tensors)-2,-1,-1):
+        A = qtn.tensor_contract(mps[index],mps[index+1])
 
-    return - (2/len(_imgs)) * logpsi
+        if index == 0:
+            SD = A.split(['v'+str(index)], absorb='left', max_bond = max_bond)
+        else:
+            SD = A.split(['i'+str(index-1),'v'+str(index)], absorb='left',max_bond = max_bond)
+
+        if index == 0:
+            mps.tensors[index].modify(data=np.transpose(SD.tensors[0].data,(1,0)))
+            mps.tensors[index+1].modify(data=SD.tensors[1].data)
+        else:
+            mps.tensors[index].modify(data=np.transpose(SD.tensors[0].data,(0,2,1)))
+            mps.tensors[index+1].modify(data=SD.tensors[1].data)
+    
+    return mps
+
+def compress_copy(mps, max_bond):
+    comp_mps = copy.copy(mps)
+    
+    for index in range(len(comp_mps.tensors)-2,-1,-1):
+        A = qtn.tensor_contract(comp_mps[index],comp_mps[index+1])
+
+        if index == 0:
+            SD = A.split(['v'+str(index)], absorb='left', max_bond = max_bond)
+        else:
+            SD = A.split(['i'+str(index-1),'v'+str(index)], absorb='left',max_bond = max_bond)
+
+        if index == 0:
+            comp_mps.tensors[index].modify(data=np.transpose(SD.tensors[0].data,(1,0)))
+            comp_mps.tensors[index+1].modify(data=SD.tensors[1].data)
+        else:
+            comp_mps.tensors[index].modify(data=np.transpose(SD.tensors[0].data,(0,2,1)))
+            comp_mps.tensors[index+1].modify(data=SD.tensors[1].data)
+    
+    return comp_mps
 
 #   _____  
 #  |___ /  
@@ -582,76 +635,6 @@ def learning_step(mps, index, imgs, lr, going_right = True):
     
     # Assumption: The mps is canonized
     Z = A@A
-    
-    # Computing the second term, summation over
-    # the data-dependent terms
-    psifrac = 0
-    for img in imgs:
-        num = computepsiprime(mps,img,index)    # PSI'(v)
-        # 'ijkl,ilkj' or 'ijkl,ijkl'?
-        # computepsiprime was coded so that the ordering of the indexes is the same
-        # as the contraction A = mps.tensors[index] @ mps.tensors[index+1]
-        # so it should be the second one    
-        den = np.einsum('ijkl,ijkl',A.data,num) # PSI(v)
-        
-        # Theoretically the two computations above can be optimized in a single function
-        # because we are contracting the very same tensors for the most part
-        
-        psifrac = psifrac + num/den
-    
-    psifrac = psifrac/imgs.shape[0]
-    
-    # Derivative of the NLL
-    dNLL = (A/Z) - psifrac
-    
-    A = A + lr*dNLL # Update A_{i,i+1}
-    
-    # Now the tensor A_{i,i+1} must be split in I_k and I_{k+1}.
-    # To preserve canonicalization:
-    # > if we are merging sliding towards the RIGHT we need to absorb right
-    #                                           S  v  D
-    #     ->-->--A_{k,k+1}--<--<-   =>   ->-->-->--x--<--<--<-   =>    >-->-->--o--<--<-  
-    #      |  |    |   |    |  |          |  |  |   |    |  |          |  |  |  |  |  |
-    #
-    # > if we are merging sliding toward the LEFT we need to absorb left
-    #
-    if going_right:
-        # FYI: split method does apply SVD by default
-        # there are variations of svd that can be inspected 
-        # for a performance boost
-        SD = A.split(['i'+str(index-1),'v'+str(index)], absorb='right')
-    else:
-        SD = A.split(['i'+str(index-1),'v'+str(index)], absorb='left')
-       
-    # SD.tensors[0] -> I_{index}
-    # SD.tensors[1] -> I_{index+1}
-    return SD
-
-def learning_step_numpy(mps, index, imgs, lr, going_right = True):
-    '''
-    DOES NOT WORK
-    
-    Compute the updated merged tensor A_{index,index+1}
-    
-      UPDATE RULE:  A_{i,i+1} += lr* 2 *( A_{i,i+1}/Z - ( SUM_{i=1}^{m} psi'(v)/psi(v) )/m )
-      
-    '''
-    
-    # Merge I_k and I_{k+1} in a single rank 4 tensor ('i_{k-1}', 'v_k', 'i_{k+1}', 'v_{k+1}')
-    # OLD: A = (mps.tensors[index] @ mps.tensors[index+1])
-    # '@' may be too slow
-    if index == 0:
-        A = np.einsum('ij,iab->jab',mps.tensors[index].data,mps.tensors[index+1].data)
-        # Assumption: The mps is canonized
-        Z = np.einsum('jab,jab',A,A)
-    elif index == (len(mps.tensors)-2):
-        A = np.einsum('ijk,ja->ika',mps.tensors[index].data,mps.tensors[index+1].data)
-        # Assumption: The mps is canonized
-        Z = np.einsum('ika,ika',A,A)
-    else:
-        A = np.einsum('ijk,jab->ikab',mps.tensors[index].data,mps.tensors[index+1].data)
-        # Assumption: The mps is canonized
-        Z = np.einsum('ikab,ikab',A,A)
     
     # Computing the second term, summation over
     # the data-dependent terms
@@ -1188,4 +1171,129 @@ def reconstruct(mps, corr_img):
     rec_img[rec_img == -1] = reconstruction
 
     return rec_img
+ 
+#  ____   
+# | ___|  
+# |___ \  
+#  ___) | 
+# |____(_) VISUALIZATION
+#######################################################  
 
+def plot_dbonds(mps, savefig=''):
+    '''
+    Plot the scatter of the bond dimension of every site
+    using a colormap to indicate the distance from the center
+    
+    Supposedly the closer to the margin, the less information is needed
+    to be shared
+    '''
+    
+    # side of the image
+    L = np.sqrt(len(mps.tensors)).astype(int)
+    
+    # Extract the distance from the margin
+    # for every pixel 
+    poss = []
+    for pos in range(L*L-1):
+        poss.append( [pos//L, pos%L] )  
+    poss = np.array(poss)
+    poss = poss - L//2
+    poss = np.max(np.abs(poss), axis=1)
+    
+    # Simple cmap for the distance from the margin
+    bcolors = [(1, 1, 0), (1, 0, 0)]
+    bcmap = LinearSegmentedColormap.from_list('rec', bcolors, N=L//2)
+    
+    sc = plt.scatter(np.arange(L*L-1), mps.bond_sizes(), c=poss, cmap = bcmap)
+    plt.colorbar(sc)
+    plt.xlabel('Site')
+    plt.ylabel('Bond dimension')
+    plt.title('(Right) bond dimension for every pixel')
+    
+    if savefig != '':
+        # save the picture as svg in the location determined by savefig
+        plt.savefig(savefig, format='svg')
+    plt.show()
+
+def bdims_imshow(mps, shape, savefig=''):
+    heat = np.append(np.array(mps.bond_sizes()),0).reshape(shape)
+    hm = plt.imshow(heat)
+    plt.colorbar(hm)
+    
+    plt.title('(Right) bond dimension for every pixel')
+    
+    if savefig != '':
+        # save the picture as svg in the location determined by savefig
+        plt.savefig(savefig, format='svg')
+    plt.show()
+        
+#  __    
+# / /_   
+#| '_ \  
+#| (_) | 
+# \___(_) OTHER
+#######################################################
+
+def bars_n_stripes(N_samples, dim = 4):
+    samples = []
+    for _ in range(N_samples):
+        sample = np.zeros((dim,dim))
+        guide = np.random.random(dim+1)
+        if guide[0]<=0.5:
+            sample[guide[1:]<=0.5,:] = 1
+        else:
+            sample[:,guide[1:]<=0.5] = 1
+        samples.append(sample)
+    return samples
+
+def save_mps_sets(mps, train_set, foldname, test_set = []):
+    # If folder does not exists
+    if not os.path.exists('./'+foldname):
+        # Make the folder
+        os.makedirs('./'+foldname)
+        
+    # Save the mps
+    quimb.utils.save_to_disk(mps, './'+foldname+'/mps')
+    
+    # Save the images
+    np.save('./'+foldname+'/train_set.npy', train_set)
+    
+    if len(test_set) > 0:
+        np.save('./'+foldname+'/test_set.npy', test_set)
+        
+def load_mps_sets(foldname):
+    # Load the mps
+    mps = quimb.utils.load_from_disk('./'+foldname+'/mps')
+    
+    # Load the images
+    train_set = np.load('./'+foldname+'/train_set.npy')
+    
+    if os.path.isfile('./'+foldname+'/test_set.npy'):
+        test_set =  np.load('./'+foldname+'/test_set.npy')
+    else: test_set = None
+    
+    return mps, train_set, test_set
+
+def meanpool2d(npmnist, shape, grayscale_threshold = 0.3):
+    '''
+    Apply a meanpool convolution of an array of images (flattened)
+    meanpool has kernel size 2x2
+    '''
+    ds_imgs = []
+    for img in npmnist:
+        ds_img = []
+        for col in range(0,shape[0],2):
+            for row in range(0,shape[1],2):
+                pixel = np.mean([img.reshape(shape)[col,row], img.reshape(shape)[col,row+1],
+                                 img.reshape(shape)[col+1,row], img.reshape(shape)[col+1,row+1]])
+                
+                ds_img.append(pixel)
+
+        ds_imgs.append(np.array(ds_img).reshape(shape[0]//2,shape[1]//2))
+        
+    ds_imgs = np.array(ds_imgs)
+    
+    ds_imgs[ds_imgs > grayscale_threshold] = 1
+    ds_imgs[ds_imgs <= grayscale_threshold] = 0
+    
+    return ds_imgs
