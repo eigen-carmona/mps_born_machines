@@ -1238,7 +1238,6 @@ def bdims_imshow(mps, shape, savefig=''):
 
 def bars_n_stripes(N_samples, dim = 4):
     samples = []
-    duplicates = 0
     for _ in range(N_samples):
         sample = np.zeros((dim,dim))
         guide = np.random.random(dim+1)
