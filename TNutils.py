@@ -1162,10 +1162,16 @@ def generate_sample(mps, reconstruct = False):
     # To reach efficiency, we gradually contract half_contr with 
     # the other tensors
     # Contract vN to IN
-    half_contr = np.einsum('a,ba', [0,1], mps.tensors[-1].data)
-    p =  half_contr @ half_contr
     
-    if np.random.rand() < p:
+    # For the first contraction, we must take into account
+    # the mps may not be normalized 
+    # for all the other one we have ratios of probabilities 
+    # and normalization will not matter
+    half_contr = np.einsum('a,ba', [0,1], mps.tensors[-1].data)
+    p0 =  half_contr @ half_contr 
+    half_contr1 = np.einsum('a,ba', [1,0], mps.tensors[-1].data)
+    p1 = half_contr1 @ half_contr1 
+    if np.random.rand() < (p0/(p0+p1)):
         generated = deque([0])
     else:
         generated = deque([1])
@@ -1187,7 +1193,6 @@ def generate_sample(mps, reconstruct = False):
         new_contr = np.einsum('ab,b', new_contr, previous_contr)
     
         p = (new_contr @ new_contr)/(previous_contr @ previous_contr)
-        
         if np.random.rand() < p:
             generated.appendleft(0)
         else:
