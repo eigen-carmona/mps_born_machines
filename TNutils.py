@@ -1238,6 +1238,7 @@ def bdims_imshow(mps, shape, savefig=''):
 
 def bars_n_stripes(N_samples, dim = 4):
     samples = []
+    duplicates = 0
     for _ in range(N_samples):
         sample = np.zeros((dim,dim))
         guide = np.random.random(dim+1)
@@ -1245,7 +1246,14 @@ def bars_n_stripes(N_samples, dim = 4):
             sample[guide[1:]<=0.5,:] = 1
         else:
             sample[:,guide[1:]<=0.5] = 1
-        samples.append(sample)
+        
+        # If the image just generated is already present
+        # in the list, we need to rerun this cycle
+        if any((sample == x).all() for x in samples):
+            _ = _ - 1
+        else:
+            samples.append(sample) 
+            
     return samples
 
 def save_mps_sets(mps, train_set, foldname, test_set = []):
