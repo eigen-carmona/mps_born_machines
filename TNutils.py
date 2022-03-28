@@ -1053,7 +1053,7 @@ def cached_stochastic_learning_epoch(mps, val_imgs, _imgs, epochs, lr,img_cache,
             if index == len(mps.tensors)-2:
                 going_right = False
 
-        nll = computeNLL(mps, imgs, 0)
+        nll = computeNLL(mps, val_imgs, 0)
         cost.append(nll)
         print('NLL: {} | Baseline: {}'.format(nll, np.log(len(_imgs)) ) )
     return cost
