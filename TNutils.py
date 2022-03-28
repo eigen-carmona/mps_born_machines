@@ -720,10 +720,10 @@ def computeNLL(mps, imgs, canonicalized_index = False):
            = -(2/|T|) * SUM_{v\in T} ( ln |psi(v)| )
     '''
      
-    if not canonicalized_index:
-        Z = mps @ mps
-    else:
+    if type(canonicalized_index) == int and 0<= canonicalized_index and canonicalized_index <= len(mps.tensors):
         Z = tneinsum2(mps.tensors[canonicalized_index], mps.tensors[canonicalized_index]).data
+    else:
+        Z = mps @ mps
         
     lnsum = 0   
     for img in imgs:
@@ -862,7 +862,7 @@ def learning_step(mps, index, imgs, lr, going_right = True, **kwargs):
     # Derivative of the NLL
     dNLL = (A/Z) - psifrac
     
-    A = A + lr*dNLL # Update A_{i,i+1}
+    A = A - lr*dNLL # Update A_{i,i+1}
     A = A/np.sqrt( tneinsum2(A,A).data )
     # Now the tensor A_{i,i+1} must be split in I_k and I_{k+1}.
     # To preserve canonicalization:
@@ -962,7 +962,7 @@ def learning_step_cached(mps, index, _imgs, lr, img_cache, going_right = True, *
     # Derivative of the NLL
     dNLL = (A/Z) - psifrac
     
-    A = A + lr*dNLL # Update A_{i,i+1}
+    A = A - lr*dNLL # Update A_{i,i+1}
     A = A/A.data.max()#np.sqrt( tneinsum2(A,A).data )
     # Now the tensor A_{i,i+1} must be split in I_k and I_{k+1}.
     # To preserve canonicalization:
@@ -1079,7 +1079,7 @@ def cached_stochastic_learning_epoch(mps, val_imgs, _imgs, epochs, lr,img_cache,
             if index == len(mps.tensors)-2:
                 going_right = False
 
-        nll = computeNLL(mps, imgs, 0)
+        nll = computeNLL(mps, val_imgs, 0)
         cost.append(nll)
         print('NLL: {} | Baseline: {}'.format(nll, np.log(len(_imgs)) ) )
     return cost
