@@ -720,10 +720,10 @@ def computeNLL(mps, imgs, canonicalized_index = False):
            = -(2/|T|) * SUM_{v\in T} ( ln |psi(v)| )
     '''
      
-    if not canonicalized_index:
-        Z = mps @ mps
-    else:
+    if type(canonicalized_index) == int and 0<= canonicalized_index and canonicalized_index <= len(mps.tensors):
         Z = tneinsum2(mps.tensors[canonicalized_index], mps.tensors[canonicalized_index]).data
+    else:
+        Z = mps @ mps
         
     lnsum = 0   
     for img in imgs:
