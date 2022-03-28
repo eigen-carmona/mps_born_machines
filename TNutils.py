@@ -1014,7 +1014,7 @@ def learning_epoch_cached(mps, _imgs, epochs, lr,img_cache,batch_size = 25,**kwa
     print('NLL: {} | Baseline: {}'.format(computeNLL_cached(mps, _imgs, img_cache,0), np.log(len(_imgs)) ) )
     # cha cha real smooth
 
-def cached_stochastic_learning_epoch(mps, _imgs, epochs, lr,img_cache,last_dirs,last_sites,last_epochs,batch_size = 25,**kwargs):
+def cached_stochastic_learning_epoch(mps, val_imgs, _imgs, epochs, lr,img_cache,last_dirs,last_sites,last_epochs,batch_size = 25,**kwargs):
     '''
     Manages the sliding left and right.
     From tensor 1 (the second), apply learning_step() sliding to the right
@@ -1053,7 +1053,7 @@ def cached_stochastic_learning_epoch(mps, _imgs, epochs, lr,img_cache,last_dirs,
             if index == len(mps.tensors)-2:
                 going_right = False
 
-        nll = computeNLL_cached(mps, _imgs, img_cache, 0)
+        nll = computeNLL(mps, imgs, 0)
         cost.append(nll)
         print('NLL: {} | Baseline: {}'.format(nll, np.log(len(_imgs)) ) )
     return cost
