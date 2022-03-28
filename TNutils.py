@@ -937,7 +937,7 @@ def learning_step_cached(mps, index, _imgs, lr, img_cache, going_right = True, *
     dNLL = (A/Z) - psifrac
     
     A = A + lr*dNLL # Update A_{i,i+1}
-    A = A/np.sqrt( tneinsum2(A,A).data )
+    A = A/A.data.max()#np.sqrt( tneinsum2(A,A).data )
     # Now the tensor A_{i,i+1} must be split in I_k and I_{k+1}.
     # To preserve canonicalization:
     # > if we are merging sliding towards the RIGHT we need to absorb right
