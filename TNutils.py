@@ -836,7 +836,7 @@ def learning_step(mps, index, imgs, lr, going_right = True, **kwargs):
     # Derivative of the NLL
     dNLL = (A/Z) - psifrac
     
-    A = A + lr*dNLL # Update A_{i,i+1}
+    A = A - lr*dNLL # Update A_{i,i+1}
     A = A/np.sqrt( tneinsum2(A,A).data )
     # Now the tensor A_{i,i+1} must be split in I_k and I_{k+1}.
     # To preserve canonicalization:
@@ -936,7 +936,7 @@ def learning_step_cached(mps, index, _imgs, lr, img_cache, going_right = True, *
     # Derivative of the NLL
     dNLL = (A/Z) - psifrac
     
-    A = A + lr*dNLL # Update A_{i,i+1}
+    A = A - lr*dNLL # Update A_{i,i+1}
     A = A/A.data.max()#np.sqrt( tneinsum2(A,A).data )
     # Now the tensor A_{i,i+1} must be split in I_k and I_{k+1}.
     # To preserve canonicalization:
