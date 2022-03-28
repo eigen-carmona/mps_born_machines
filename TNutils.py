@@ -285,7 +285,7 @@ def tneinsum2(tn1,tn2):
     
     return qtn.Tensor(data=data, inds=inds_out)
 
-def initialize_mps(Ldim, bdim = 30, canonicalize = 1):
+def initialize_mps(Ldim, bdim = 30, canonicalize = 0):
     '''
     Initialize the MPS tensor network
     1. Create the MPS TN
@@ -703,6 +703,32 @@ def compress_copy(mps, max_bond):
             comp_mps.tensors[index+1].modify(data=SD.tensors[1].data)
     
     return comp_mps
+
+def compress2(mps, max_bond):
+    '''
+    unlike copress function, this first checks if the bond between
+    two tensors is higher than maxbond. If not it skips the pair.
+    
+    THIS FUNCTION BREAKS CANONIZATION but it is faster
+    '''
+    for index in range(len(mps.tensors)-2,-1,-1):
+        if mps.bond_sizes()[index] > max_bond:
+            A = qtn.tensor_contract(mps[index],mps[index+1])
+
+            if index == 0:
+                SD = A.split(['v'+str(index)], absorb='left', max_bond = max_bond)
+
+                mps.tensors[index].modify(data=np.transpose(SD.tensors[0].data,(1,0)))
+                mps.tensors[index+1].modify(data=SD.tensors[1].data)
+            else:
+                SD = A.split(['i'+str(index-1),'v'+str(index)], absorb='left',max_bond = max_bond)
+
+                mps.tensors[index].modify(data=np.transpose(SD.tensors[0].data,(0,2,1)))
+                mps.tensors[index+1].modify(data=SD.tensors[1].data)
+        else:
+            pass
+            
+    return mps
 
 #   _____  
 #  |___ /  
@@ -1237,15 +1263,28 @@ def bdims_imshow(mps, shape, savefig=''):
 #######################################################
 
 def bars_n_stripes(N_samples, dim = 4):
+    if N_samples > 30:
+        N_samples = 30
+        
     samples = []
-    for _ in range(N_samples):
+    _ = 0
+    while _ < N_samples:
         sample = np.zeros((dim,dim))
         guide = np.random.random(dim+1)
         if guide[0]<=0.5:
             sample[guide[1:]<=0.5,:] = 1
         else:
             sample[:,guide[1:]<=0.5] = 1
-        samples.append(sample)
+        
+        # If the image just generated is already present
+        # in the list, we need to rerun this cycle
+        if not any((sample == x).all() for x in samples):
+            samples.append(sample)
+            _ = _ + 1
+            
+    return samples
+
+            
     return samples
 
 def save_mps_sets(mps, train_set, foldname, test_set = []):
