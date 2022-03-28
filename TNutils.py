@@ -1263,8 +1263,12 @@ def bdims_imshow(mps, shape, savefig=''):
 #######################################################
 
 def bars_n_stripes(N_samples, dim = 4):
+    if N_samples > 30:
+        N_samples = 30
+        
     samples = []
-    for _ in range(N_samples):
+    _ = 0
+    while _ < N_samples:
         sample = np.zeros((dim,dim))
         guide = np.random.random(dim+1)
         if guide[0]<=0.5:
@@ -1274,10 +1278,12 @@ def bars_n_stripes(N_samples, dim = 4):
         
         # If the image just generated is already present
         # in the list, we need to rerun this cycle
-        if any((sample == x).all() for x in samples):
-            _ = _ - 1
-        else:
-            samples.append(sample) 
+        if not any((sample == x).all() for x in samples):
+            samples.append(sample)
+            _ = _ + 1
+            
+    return samples
+
             
     return samples
 
