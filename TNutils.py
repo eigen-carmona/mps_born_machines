@@ -285,7 +285,7 @@ def tneinsum2(tn1,tn2):
     
     return qtn.Tensor(data=data, inds=inds_out)
 
-def initialize_mps(Ldim, bdim = 30, canonicalize = 1):
+def initialize_mps(Ldim, bdim = 30, canonicalize = 0):
     '''
     Initialize the MPS tensor network
     1. Create the MPS TN
@@ -703,6 +703,32 @@ def compress_copy(mps, max_bond):
             comp_mps.tensors[index+1].modify(data=SD.tensors[1].data)
     
     return comp_mps
+
+def compress2(mps, max_bond):
+    '''
+    unlike copress function, this first checks if the bond between
+    two tensors is higher than maxbond. If not it skips the pair.
+    
+    THIS FUNCTION BREAKS CANONIZATION but it is faster
+    '''
+    for index in range(len(mps.tensors)-2,-1,-1):
+        if mps.bond_sizes()[index] > max_bond:
+            A = qtn.tensor_contract(mps[index],mps[index+1])
+
+            if index == 0:
+                SD = A.split(['v'+str(index)], absorb='left', max_bond = max_bond)
+
+                mps.tensors[index].modify(data=np.transpose(SD.tensors[0].data,(1,0)))
+                mps.tensors[index+1].modify(data=SD.tensors[1].data)
+            else:
+                SD = A.split(['i'+str(index-1),'v'+str(index)], absorb='left',max_bond = max_bond)
+
+                mps.tensors[index].modify(data=np.transpose(SD.tensors[0].data,(0,2,1)))
+                mps.tensors[index+1].modify(data=SD.tensors[1].data)
+        else:
+            pass
+            
+    return mps
 
 #   _____  
 #  |___ /  
