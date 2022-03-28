@@ -386,27 +386,34 @@ def tens_picture(picture):
     return np.array(tens)
 
 def left_right_cache(mps,_imgs):
-    # Cache
-    # For each image, we compute the left vector for each site, (?) as well as the right vector(?)
-    # update it each time a site is updated
-    img_cache = []
-    for img in _imgs:
-        # TODO: Instead of contracting, just take mps[0][:,0] or mps[0][:,1]
-        curr_l = qtn.Tensor()
-        curr_r = qtn.Tensor()
-        left_cache = [curr_l]
-        right_cache = [curr_r]
-        for site in range(len(img)-1):
-            contr_l = mps[site]@curr_l
-            curr_l = contr_l@img[site]
-            left_cache.append(curr_l)
-            contr_r = mps[-(site+1)]@curr_r
-            curr_r = contr_r@img[-(site+1)]
-            right_cache.append(curr_r)
-        # reversing the right cache for site indexing consistency
-        right_cache.reverse()
-        img_cache.append((left_cache,right_cache))
-    return np.array(img_cache)
+    curr_l = np.array(len(_imgs)*[qtn.Tensor()])
+    curr_l = curr_l.reshape((len(_imgs),1))
+    for site in range(len(mps.tensors)-1):
+        machines = np.array(len(_imgs)*[mps[site]])
+        contr_l = tneinsum3(curr_l[:,-1],machines,_imgs[:,site])
+        contr_l = contr_l.reshape((len(_imgs),1))
+        curr_l = np.hstack([curr_l,contr_l])
+    curr_r = np.array(len(_imgs)*[qtn.Tensor()])
+    curr_r = curr_r.reshape((len(_imgs),1))
+    for site in range(len(mps.tensors)-1,0,-1):
+        machines = np.array(len(_imgs)*[mps[site]])
+        contr_r = tneinsum3(curr_r[:,0],machines,_imgs[:,site])
+        contr_r = contr_r.reshape((len(_imgs),1))
+        curr_r = np.hstack([contr_r,curr_r])
+    img_cache = np.array([curr_l,curr_r]).transpose((1,0,2))
+    return img_cache
+
+def sequential_update(mps,_imgs,img_cache,site,going_right):
+    if going_right:
+        left_cache = img_cache[:,0,site]
+        left_imgs = _imgs[:,site]
+        new_cache = tneinsum3(left_cache,np.array(len(_imgs)*[mps[site]]),left_imgs)
+        img_cache[:,0,site+1] = new_cache
+    else:
+        right_cache = img_cache[:,1,site+1]
+        right_imgs = _imgs[:,site+1]
+        new_cache = tneinsum3(right_cache,np.array(len(_imgs)*[mps[site+1]]),right_imgs)
+        img_cache[:,1,site] = new_cache
 
 def restart_cache(mps,site,left_cache,right_cache,_img):
     left_site = site
@@ -972,20 +979,19 @@ def learning_step_cached(mps, index, _imgs, lr, img_cache, going_right = True, *
 
     # Computing the second term, summation over
     # the data-dependent terms
-    psifrac = 0
-    
-    for _img,cacha in zip(_imgs,img_cache):
-        L, R = cacha
-        left = tneinsum2(L[index],_img[index])
-        right = tneinsum2(R[index+1],_img[index+1])
-        num = tneinsum2(left,right)
-        den = qtn.tensor_contract(num,A)
 
-        # Theoretically the two computations above can be optimized in a single function
-        # because we are contracting the very same tensors for the most part
+    # Extract the cache and free legs
+    left_cache = img_cache[:,0,index]
+    right_cache = img_cache[:,1,index+1]
+    left_imgs = _imgs[:,index]
+    right_imgs = _imgs[:,index+1]
 
-        psifrac = psifrac + num/den
+    # Contract in parallel
+    psi_primed_arr = tneinsum3(left_cache,right_cache,left_imgs,right_imgs)
 
+    # Generate magical terms
+    psi = tneinsum3(np.array(len(_imgs)*[A]),psi_primed_arr)
+    psifrac = sum(psi_primed_arr/into_data(psi))
     psifrac = psifrac/len(_imgs)
 
     # Derivative of the NLL
@@ -1051,15 +1057,7 @@ def learning_epoch_cached(mps, _imgs, epochs, lr,img_cache,batch_size = 25,**kwa
                 mps.tensors[index+1].modify(data=A.tensors[1].data)
 
             # Update the cache for all images (for all? really?)
-            for i,cache in enumerate(img_cache):
-                if going_right:
-                    # updating left
-                    left = tneinsum2(mps[index],cache[0][index])
-                    img_cache[i][0][index+1] = tneinsum2(left,_imgs[i][index])
-                else:
-                    # updating right
-                    right = tneinsum2(mps[index+1],cache[1][index+1])
-                    img_cache[i][1][index] = tneinsum2(right,_imgs[i][index+1])
+            sequential_update(mps,_imgs,img_cache,index,going_right)
             #p0 = computepsi(mps,imgs[0])**2
             progress.set_description('Left Index: {}'.format(index))
 
