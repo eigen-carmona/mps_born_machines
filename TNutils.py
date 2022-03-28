@@ -132,7 +132,7 @@ def get_data(train_size = 1000, test_size = 100, grayscale_threshold = .5):
     # Return training set and test set
     return npmnist[:train_size], npmnist[train_size:]
 
-def plot_img(img_flat, shape, flip_color = True, savefig = ''):
+def plot_img(img_flat, shape, flip_color = True, border = False, savefig = ''):
     '''
     Display the image from the flattened form
     '''
@@ -148,7 +148,11 @@ def plot_img(img_flat, shape, flip_color = True, savefig = ''):
     else:
         plt.imshow(np.reshape(img_flat,shape), cmap='gray')
         
-    plt.axis('off')
+    if border:
+        plt.xticks([])
+        plt.yticks([])
+    else:
+        plt.axis('off')
     
     if savefig != '':
         # save the picture as svg in the location determined by savefig
@@ -200,7 +204,7 @@ def partial_removal_img(mnistimg, shape, fraction = .5, axis = 0, half = None):
     
     return mnistimg_corr
 
-def plot_rec(cor_flat, rec_flat, savefig = ''):
+def plot_rec(cor_flat, rec_flat, shape, savefig = ''):
     '''
     Display the RECONSTRUCTION
     '''
@@ -224,8 +228,8 @@ def plot_rec(cor_flat, rec_flat, savefig = ''):
     cor_flat = np.copy(cor_flat)
     cor_flat[cor_flat == -1] = 0
     plt.figure(figsize = (2,2))
-    plt.imshow(1-np.reshape(rec_flat,(28,28)), cmap=reccmap)
-    plt.imshow(np.reshape(cor_flat,(28,28)), cmap=corrupted_cmap)
+    plt.imshow(1-np.reshape(rec_flat, shape), cmap=reccmap)
+    plt.imshow(np.reshape(cor_flat, shape), cmap=corrupted_cmap)
         
     plt.axis('off')
     
