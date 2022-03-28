@@ -285,6 +285,35 @@ def tneinsum2(tn1,tn2):
     
     return qtn.Tensor(data=data, inds=inds_out)
 
+@functools.lru_cache(2**12)
+def arr_inds_to_eq(inputs, output):
+    """
+    Conert indexes to the equation of contractions for np.einsum function
+    """
+    symbol_get = collections.defaultdict(map(oe.get_symbol, itertools.count()).__next__).__getitem__
+    in_str = ("".join(map(symbol_get, inds)) for inds in inputs)
+    out_str = "".join(map(symbol_get, output))
+    return "i"+",i".join(in_str) + f"->i{out_str}"
+
+def into_data(tensor_array):
+    return np.array([ten.data for ten in tensor_array])
+
+def into_tensarr(data_arr,inds):
+    return np.array([qtn.Tensor(data=data,inds=inds) for data in data_arr])
+
+def tneinsum3(*tensor_lists):
+    '''
+    Takes arrays of tensors and contracts them element by element.
+    '''
+    # Retrieve indeces from the first elements
+    inds_in = tuple([arr[0].inds for arr in tensor_lists])
+    inds_out = tuple(qtn.tensor_core._gen_output_inds(cytoolz.concat(inds_in)))
+    eq = arr_inds_to_eq(inds_in, inds_out)
+
+    data_arr = np.einsum(eq,*[into_data(ten) for ten in tensor_lists])
+
+    return into_tensarr(data_arr,inds_out)
+
 def initialize_mps(Ldim, bdim = 30, canonicalize = 0):
     '''
     Initialize the MPS tensor network
