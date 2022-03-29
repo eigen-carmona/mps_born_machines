@@ -200,7 +200,7 @@ def partial_removal_img(mnistimg, shape, fraction = .5, axis = 0, half = None):
     
     return mnistimg_corr
 
-def plot_rec(cor_flat, rec_flat, savefig = ''):
+def plot_rec(cor_flat, rec_flat, shape, savefig = '', N = 2):
     '''
     Display the RECONSTRUCTION
     '''
@@ -218,14 +218,14 @@ def plot_rec(cor_flat, rec_flat, savefig = ''):
     corrupted_cmap = ListedColormap(corrupted_cmap)
     
     reccolors = [(1, 0, 0), (1, 1, 1)]
-    reccmap = LinearSegmentedColormap.from_list('rec', reccolors, N=2)
+    reccmap = LinearSegmentedColormap.from_list('rec', reccolors, N=N)
     
     # If the image is corrupted for partial reconstruction (pixels are set to -1)
     cor_flat = np.copy(cor_flat)
     cor_flat[cor_flat == -1] = 0
     plt.figure(figsize = (2,2))
-    plt.imshow(1-np.reshape(rec_flat,(28,28)), cmap=reccmap)
-    plt.imshow(np.reshape(cor_flat,(28,28)), cmap=corrupted_cmap)
+    plt.imshow(1-np.reshape(rec_flat,shape), cmap=reccmap)
+    plt.imshow(np.reshape(cor_flat,shape), cmap=corrupted_cmap)
         
     plt.axis('off')
     
