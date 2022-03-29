@@ -5,6 +5,7 @@
 # Arrays
 import numpy as np
 import cytoolz
+import dask as ds
 
 # Deep Learning stuff
 import torch
@@ -296,7 +297,14 @@ def arr_inds_to_eq(inputs, output):
     return "i"+",i".join(in_str) + f"->i{out_str}"
 
 def into_data(tensor_array):
-    return np.array([ten.data for ten in tensor_array])
+    return np.array([ten.data.astype(np.float32) for ten in tensor_array])
+
+def _into_data(tensor_array):
+    op_arr = []
+    for ten in tensor_array:
+        op_arr.append(ds.delayed(lambda x: x.data.astype(np.float32))(ten))
+    data_arr = ds.delayed(lambda x: x)(op_arr).compute()
+    return data_arr
 
 def into_tensarr(data_arr,inds):
     return np.array([qtn.Tensor(data=data,inds=inds) for data in data_arr])
