@@ -309,16 +309,24 @@ def _into_data(tensor_array):
 def into_tensarr(data_arr,inds):
     return np.array([qtn.Tensor(data=data,inds=inds) for data in data_arr])
 
-def tneinsum3(*tensor_lists):
+def tneinsum3(*tensor_lists,backend = 'torch'):
     '''
     Takes arrays of tensors and contracts them element by element.
     '''
     # Retrieve indeces from the first elements
     inds_in = tuple([arr[0].inds for arr in tensor_lists])
+    # Output indeces
     inds_out = tuple(qtn.tensor_core._gen_output_inds(cytoolz.concat(inds_in)))
+    # Convert into einsum expression with extra index for entries
     eq = arr_inds_to_eq(inds_in, inds_out)
-
-    data_arr = np.einsum(eq,*[into_data(ten) for ten in tensor_lists])
+    # Generate a list of arrays of numpy tensors
+    tens_data = [into_data(ten) for ten in tensor_lists]
+    # Extract the shapes
+    shapes = [tens.shape for tens in tens_data]
+    # prepare opteinsum reduction expression
+    expr = oe.contract_expression(eq,*shapes)
+    # execute and extract
+    data_arr = expr(*tens_data,backend = backend)
 
     return into_tensarr(data_arr,inds_out)
 
