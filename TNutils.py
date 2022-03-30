@@ -1136,6 +1136,68 @@ def cached_stochastic_learning_epoch(mps, val_imgs, _imgs, epochs, lr,img_cache,
 #     |_|(_) GENERATION
 #######################################################            
 
+def memoize(func):
+    ref = {}
+    def wrapper(*args):
+        result = ref.get(tuple(args),None)
+        if result is None:
+            result = func(*args)
+            ref[tuple(args)] = result
+        return result
+    return wrapper
+
+@memoize
+def zero(ind):
+    return qtn.Tensor(data = [0,1],inds=(f'v{ind}',))
+@memoize
+def one(ind):
+    return qtn.Tensor(data = [1,0],inds=(f'v{ind}',))
+
+def generate_samples(mps,N):
+    # Iniatlize samples array
+    sites = len(mps.tensors)
+    samples = np.zeros((N,sites))
+    # Assumption: mps is right-canonized
+    # Sampling first pixel. Only one probability has to be measured
+    ampl = mps[0]@one(0)
+    p = ampl@ampl
+    # Generate a random sample for the first pixel of each image:
+    rand = np.random.random(N)
+    # Which are valid?
+    samples[rand <= p,0] = 1# Should this be one() instead? May be useful for reconstruction.
+
+    # Initialize an array of tensors so as to store the half-contractions
+    half_contr = np.repeat(ampl,N)
+    half_contr[rand>p] = mps[0]@zero(0)
+
+    # iterate over the next sites
+    for site in range(1,sites):
+        lifechanger = mps[site]@one(site)
+        ampl = tneinsum3(half_contr,np.array(N*[lifechanger]))
+        p_arr = tneinsum3(ampl,ampl)
+        cond_p_arr = into_data(p_arr)/into_data(tneinsum3(half_contr,half_contr))
+        rand = np.random.random(N)
+        mask = rand <= cond_p_arr
+        # The chosen ones
+        samples[mask,site] = 1
+        # If we are at the final site, we're done
+        if site == sites-1:
+            # return the samples as they're now complete
+            return samples
+
+        # Update those who were accepted
+        if np.any(mask):
+            half_contr[mask] = ampl[mask]
+        # now, proceed with the unwanted
+        unmask = np.logical_not(mask)
+        # update the rejected ones (better said, the rejected zeros... badum-tss)
+        if np.any(unmask):
+            extra_term = mps[site]@zero(site)
+            half_contr[unmask] = tneinsum3(
+                half_contr[unmask],
+                np.array(unmask.sum()*[extra_term])
+                )
+
 def generate_sample(mps, reconstruct = False):
     '''
     Generate a sample from an MPS.
