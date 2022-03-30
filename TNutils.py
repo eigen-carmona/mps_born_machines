@@ -1051,8 +1051,8 @@ def learning_epoch_cached(mps, _imgs, epochs, lr,img_cache,batch_size = 25,**kwa
     batch_size = min(len(_imgs),batch_size)
     guide = np.arange(len(_imgs))
     # Execute the epochs
+    cost = []
     for epoch in range(epochs):
-        print('NLL: {} | Baseline: {}'.format(computeNLL_cached(mps, _imgs, img_cache, 0), np.log(len(_imgs)) ) )
         print(f'epoch {epoch+1}/{epochs}')
         # [1,2,...,780,781,780,...,2,1]
         #progress = tq.tqdm([i for i in range(0,len(mps.tensors)-1)] + [i for i in range(len(mps.tensors)-3,0,-1)], leave=True)
@@ -1078,9 +1078,11 @@ def learning_epoch_cached(mps, _imgs, epochs, lr,img_cache,batch_size = 25,**kwa
 
             if index == len(mps.tensors)-2:
                 going_right = False
-    
-    print('NLL: {} | Baseline: {}'.format(computeNLL_cached(mps, _imgs, img_cache,0), np.log(len(_imgs)) ) )
+        nll = computeNLL_cached(mps, _imgs, img_cache,0)
+        print('NLL: {} | Baseline: {}'.format(nll, np.log(len(_imgs)) ) )
+        cost.append(nll)
     # cha cha real smooth
+    return cost
 
 def cached_stochastic_learning_epoch(mps, val_imgs, _imgs, epochs, lr,img_cache,last_dirs,last_sites,last_epochs,batch_size = 25,**kwargs):
     '''
