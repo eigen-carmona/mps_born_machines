@@ -5,6 +5,7 @@
 # Arrays
 import numpy as np
 import cytoolz
+import dask as ds
 
 # Deep Learning stuff
 import torch
@@ -290,6 +291,50 @@ def tneinsum2(tn1,tn2):
     
     return qtn.Tensor(data=data, inds=inds_out)
 
+@functools.lru_cache(2**12)
+def arr_inds_to_eq(inputs, output):
+    """
+    Conert indexes to the equation of contractions for np.einsum function
+    """
+    symbol_get = collections.defaultdict(map(oe.get_symbol, itertools.count()).__next__).__getitem__
+    in_str = ("".join(map(symbol_get, inds)) for inds in inputs)
+    out_str = "".join(map(symbol_get, output))
+    return "i"+",i".join(in_str) + f"->i{out_str}"
+
+def into_data(tensor_array):
+    return np.array([ten.data for ten in tensor_array])
+
+def _into_data(tensor_array):
+    op_arr = []
+    for ten in tensor_array:
+        op_arr.append(ds.delayed(lambda x: x.data.astype(np.float32))(ten))
+    data_arr = ds.delayed(lambda x: x)(op_arr).compute()
+    return data_arr
+
+def into_tensarr(data_arr,inds):
+    return np.array([qtn.Tensor(data=data,inds=inds) for data in data_arr])
+
+def tneinsum3(*tensor_lists,backend = 'numpy'):
+    '''
+    Takes arrays of tensors and contracts them element by element.
+    '''
+    # Retrieve indeces from the first elements
+    inds_in = tuple([arr[0].inds for arr in tensor_lists])
+    # Output indeces
+    inds_out = tuple(qtn.tensor_core._gen_output_inds(cytoolz.concat(inds_in)))
+    # Convert into einsum expression with extra index for entries
+    eq = arr_inds_to_eq(inds_in, inds_out)
+    # Generate a list of arrays of numpy tensors
+    tens_data = [into_data(ten) for ten in tensor_lists]
+    # Extract the shapes
+    shapes = [tens.shape for tens in tens_data]
+    # prepare opteinsum reduction expression
+    expr = oe.contract_expression(eq,*shapes)
+    # execute and extract
+    data_arr = expr(*tens_data,backend = backend)
+
+    return into_tensarr(data_arr,inds_out)
+
 def initialize_mps(Ldim, bdim = 30, canonicalize = 0):
     '''
     Initialize the MPS tensor network
@@ -362,27 +407,34 @@ def tens_picture(picture):
     return np.array(tens)
 
 def left_right_cache(mps,_imgs):
-    # Cache
-    # For each image, we compute the left vector for each site, (?) as well as the right vector(?)
-    # update it each time a site is updated
-    img_cache = []
-    for img in _imgs:
-        # TODO: Instead of contracting, just take mps[0][:,0] or mps[0][:,1]
-        curr_l = qtn.Tensor()
-        curr_r = qtn.Tensor()
-        left_cache = [curr_l]
-        right_cache = [curr_r]
-        for site in range(len(img)-1):
-            contr_l = mps[site]@curr_l
-            curr_l = contr_l@img[site]
-            left_cache.append(curr_l)
-            contr_r = mps[-(site+1)]@curr_r
-            curr_r = contr_r@img[-(site+1)]
-            right_cache.append(curr_r)
-        # reversing the right cache for site indexing consistency
-        right_cache.reverse()
-        img_cache.append((left_cache,right_cache))
-    return np.array(img_cache)
+    curr_l = np.array(len(_imgs)*[qtn.Tensor()])
+    curr_l = curr_l.reshape((len(_imgs),1))
+    for site in range(len(mps.tensors)-1):
+        machines = np.array(len(_imgs)*[mps[site]])
+        contr_l = tneinsum3(curr_l[:,-1],machines,_imgs[:,site])
+        contr_l = contr_l.reshape((len(_imgs),1))
+        curr_l = np.hstack([curr_l,contr_l])
+    curr_r = np.array(len(_imgs)*[qtn.Tensor()])
+    curr_r = curr_r.reshape((len(_imgs),1))
+    for site in range(len(mps.tensors)-1,0,-1):
+        machines = np.array(len(_imgs)*[mps[site]])
+        contr_r = tneinsum3(curr_r[:,0],machines,_imgs[:,site])
+        contr_r = contr_r.reshape((len(_imgs),1))
+        curr_r = np.hstack([contr_r,curr_r])
+    img_cache = np.array([curr_l,curr_r]).transpose((1,0,2))
+    return img_cache
+
+def sequential_update(mps,_imgs,img_cache,site,going_right):
+    if going_right:
+        left_cache = img_cache[:,0,site]
+        left_imgs = _imgs[:,site]
+        new_cache = tneinsum3(left_cache,np.array(len(_imgs)*[mps[site]]),left_imgs)
+        img_cache[:,0,site+1] = new_cache
+    else:
+        right_cache = img_cache[:,1,site+1]
+        right_imgs = _imgs[:,site+1]
+        new_cache = tneinsum3(right_cache,np.array(len(_imgs)*[mps[site+1]]),right_imgs)
+        img_cache[:,1,site] = new_cache
 
 def restart_cache(mps,site,left_cache,right_cache,_img):
     left_site = site
@@ -741,21 +793,17 @@ def computeNLL_cached(mps, _imgs, img_cache, index):
     A = qtn.tensor_contract(mps[index],mps[index+1])
     Z = qtn.tensor_contract(A,A)
 
-    logpsi = 0
-    for _img,cacha in zip(_imgs,img_cache):
-        L, R = cacha
-        left = tneinsum2(L[index],_img[index])
-        right = tneinsum2(R[index+1],_img[index+1])
-        psiprime = tneinsum2(left,right)
-        logpsi = logpsi + np.log(np.abs(qtn.tensor_contract(psiprime,A)))
+    psi_primed_arr =arr_psi_primed_cache(_imgs,img_cache,index)
+    psi = tneinsum3(np.array(len(_imgs)*[A]),psi_primed_arr)
+    logpsi = np.log(np.abs(into_data(psi)))
+    sum_log = logpsi.sum()
     #             __    _        _         __  _    _           _        _
     # NLL = - _1_ \  ln|  _P(V)_  | = -_1_ \  |  ln| |Psi(v)|^2  | - lnZ  |
     #         |T| /_   |_   Z    _|    |T| /_ |_   |_           _|       _|
     #             _  __                      _         __
     #     = -_1_ | 2 \  ln|Psi(v)| - |T|lnZ   | = -_2_ \  ln|Psi(v)|  - lnZ
     #        |T| |_  /_                      _|    |T| /_
-    
-    return - (2/len(_imgs)) * logpsi + np.log(Z)
+    return -(2/len(_imgs))*sum_log + np.log(Z)
 
 def compress(mps, max_bond):
     
@@ -935,6 +983,17 @@ def learning_epoch_sgd(mps, imgs, epochs, lr, batch_size = 25,**kwargs):
 
     # cha cha real smooth
 
+def arr_psi_primed_cache(_imgs,img_cache,index):
+    # Extract the cache and free legs
+    left_cache = img_cache[:,0,index]
+    right_cache = img_cache[:,1,index+1]
+    left_imgs = _imgs[:,index]
+    right_imgs = _imgs[:,index+1]
+
+    # Contract in parallel
+    psi_primed_arr = tneinsum3(left_cache,right_cache,left_imgs,right_imgs)
+    return psi_primed_arr
+
 def learning_step_cached(mps, index, _imgs, lr, img_cache, going_right = True, **kwargs):
     '''
     Compute the updated merged tensor A_{index,index+1}
@@ -948,20 +1007,11 @@ def learning_step_cached(mps, index, _imgs, lr, img_cache, going_right = True, *
 
     # Computing the second term, summation over
     # the data-dependent terms
-    psifrac = 0
-    
-    for _img,cacha in zip(_imgs,img_cache):
-        L, R = cacha
-        left = tneinsum2(L[index],_img[index])
-        right = tneinsum2(R[index+1],_img[index+1])
-        num = tneinsum2(left,right)
-        den = qtn.tensor_contract(num,A)
+    psi_primed_arr = arr_psi_primed_cache(_imgs,img_cache,index)
 
-        # Theoretically the two computations above can be optimized in a single function
-        # because we are contracting the very same tensors for the most part
-
-        psifrac = psifrac + num/den
-
+    # Generate magical terms
+    psi = tneinsum3(np.array(len(_imgs)*[A]),psi_primed_arr)
+    psifrac = sum(psi_primed_arr/into_data(psi))
     psifrac = psifrac/len(_imgs)
 
     # Derivative of the NLL
@@ -1006,8 +1056,8 @@ def learning_epoch_cached(mps, _imgs, epochs, lr,img_cache,batch_size = 25,**kwa
     batch_size = min(len(_imgs),batch_size)
     guide = np.arange(len(_imgs))
     # Execute the epochs
+    cost = []
     for epoch in range(epochs):
-        print('NLL: {} | Baseline: {}'.format(computeNLL_cached(mps, _imgs, img_cache, 0), np.log(len(_imgs)) ) )
         print(f'epoch {epoch+1}/{epochs}')
         # [1,2,...,780,781,780,...,2,1]
         #progress = tq.tqdm([i for i in range(0,len(mps.tensors)-1)] + [i for i in range(len(mps.tensors)-3,0,-1)], leave=True)
@@ -1027,23 +1077,17 @@ def learning_epoch_cached(mps, _imgs, epochs, lr,img_cache,batch_size = 25,**kwa
                 mps.tensors[index+1].modify(data=A.tensors[1].data)
 
             # Update the cache for all images (for all? really?)
-            for i,cache in enumerate(img_cache):
-                if going_right:
-                    # updating left
-                    left = tneinsum2(mps[index],cache[0][index])
-                    img_cache[i][0][index+1] = tneinsum2(left,_imgs[i][index])
-                else:
-                    # updating right
-                    right = tneinsum2(mps[index+1],cache[1][index+1])
-                    img_cache[i][1][index] = tneinsum2(right,_imgs[i][index+1])
+            sequential_update(mps,_imgs,img_cache,index,going_right)
             #p0 = computepsi(mps,imgs[0])**2
             progress.set_description('Left Index: {}'.format(index))
 
             if index == len(mps.tensors)-2:
                 going_right = False
-    
-    print('NLL: {} | Baseline: {}'.format(computeNLL_cached(mps, _imgs, img_cache,0), np.log(len(_imgs)) ) )
+        nll = computeNLL_cached(mps, _imgs, img_cache,0)
+        print('NLL: {} | Baseline: {}'.format(nll, np.log(len(_imgs)) ) )
+        cost.append(nll)
     # cha cha real smooth
+    return cost
 
 def cached_stochastic_learning_epoch(mps, val_imgs, _imgs, epochs, lr,img_cache,last_dirs,last_sites,last_epochs,batch_size = 25,**kwargs):
     '''
