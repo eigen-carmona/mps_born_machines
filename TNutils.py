@@ -788,21 +788,17 @@ def computeNLL_cached(mps, _imgs, img_cache, index):
     A = qtn.tensor_contract(mps[index],mps[index+1])
     Z = qtn.tensor_contract(A,A)
 
-    logpsi = 0
-    for _img,cacha in zip(_imgs,img_cache):
-        L, R = cacha
-        left = tneinsum2(L[index],_img[index])
-        right = tneinsum2(R[index+1],_img[index+1])
-        psiprime = tneinsum2(left,right)
-        logpsi = logpsi + np.log(np.abs(qtn.tensor_contract(psiprime,A)))
+    psi_primed_arr =arr_psi_primed_cache(_imgs,img_cache,index)
+    psi = tneinsum3(np.array(len(_imgs)*[A]),psi_primed_arr)
+    logpsi = np.log(np.abs(into_data(psi)))
+    sum_log = logpsi.sum()
     #             __    _        _         __  _    _           _        _
     # NLL = - _1_ \  ln|  _P(V)_  | = -_1_ \  |  ln| |Psi(v)|^2  | - lnZ  |
     #         |T| /_   |_   Z    _|    |T| /_ |_   |_           _|       _|
     #             _  __                      _         __
     #     = -_1_ | 2 \  ln|Psi(v)| - |T|lnZ   | = -_2_ \  ln|Psi(v)|  - lnZ
     #        |T| |_  /_                      _|    |T| /_
-    
-    return - (2/len(_imgs)) * logpsi + np.log(Z)
+    return -(2/len(_imgs))*sum_log + np.log(Z)
 
 def compress(mps, max_bond):
     
