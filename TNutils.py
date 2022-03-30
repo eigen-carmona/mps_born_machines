@@ -297,7 +297,7 @@ def arr_inds_to_eq(inputs, output):
     return "i"+",i".join(in_str) + f"->i{out_str}"
 
 def into_data(tensor_array):
-    return np.array([ten.data.astype(np.float32) for ten in tensor_array])
+    return np.array([ten.data for ten in tensor_array])
 
 def _into_data(tensor_array):
     op_arr = []
@@ -309,7 +309,7 @@ def _into_data(tensor_array):
 def into_tensarr(data_arr,inds):
     return np.array([qtn.Tensor(data=data,inds=inds) for data in data_arr])
 
-def tneinsum3(*tensor_lists,backend = 'torch'):
+def tneinsum3(*tensor_lists,backend = 'numpy'):
     '''
     Takes arrays of tensors and contracts them element by element.
     '''
