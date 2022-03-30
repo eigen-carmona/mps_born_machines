@@ -132,7 +132,7 @@ def get_data(train_size = 1000, test_size = 100, grayscale_threshold = .5):
     # Return training set and test set
     return npmnist[:train_size], npmnist[train_size:]
 
-def plot_img(img_flat, shape, flip_color = True, savefig = ''):
+def plot_img(img_flat, shape, flip_color = True, border = False, savefig = ''):
     '''
     Display the image from the flattened form
     '''
@@ -148,7 +148,11 @@ def plot_img(img_flat, shape, flip_color = True, savefig = ''):
     else:
         plt.imshow(np.reshape(img_flat,shape), cmap='gray')
         
-    plt.axis('off')
+    if border:
+        plt.xticks([])
+        plt.yticks([])
+    else:
+        plt.axis('off')
     
     if savefig != '':
         # save the picture as svg in the location determined by savefig
@@ -224,8 +228,9 @@ def plot_rec(cor_flat, rec_flat, shape, savefig = '', N = 2):
     cor_flat = np.copy(cor_flat)
     cor_flat[cor_flat == -1] = 0
     plt.figure(figsize = (2,2))
-    plt.imshow(1-np.reshape(rec_flat,shape), cmap=reccmap)
-    plt.imshow(np.reshape(cor_flat,shape), cmap=corrupted_cmap)
+    
+    plt.imshow(1-np.reshape(rec_flat, shape), cmap=reccmap)
+    plt.imshow(np.reshape(cor_flat, shape), cmap=corrupted_cmap)
         
     plt.axis('off')
     
@@ -1158,10 +1163,16 @@ def generate_sample(mps, reconstruct = False):
     # To reach efficiency, we gradually contract half_contr with 
     # the other tensors
     # Contract vN to IN
-    half_contr = np.einsum('a,ba', [0,1], mps.tensors[-1].data)
-    p =  half_contr @ half_contr
     
-    if np.random.rand() < p:
+    # For the first contraction, we must take into account
+    # the mps may not be normalized 
+    # for all the other one we have ratios of probabilities 
+    # and normalization will not matter
+    half_contr = np.einsum('a,ba', [0,1], mps.tensors[-1].data)
+    p0 =  half_contr @ half_contr 
+    half_contr1 = np.einsum('a,ba', [1,0], mps.tensors[-1].data)
+    p1 = half_contr1 @ half_contr1 
+    if np.random.rand() < (p0/(p0+p1)):
         generated = deque([0])
     else:
         generated = deque([1])
@@ -1183,7 +1194,6 @@ def generate_sample(mps, reconstruct = False):
         new_contr = np.einsum('ab,b', new_contr, previous_contr)
     
         p = (new_contr @ new_contr)/(previous_contr @ previous_contr)
-        
         if np.random.rand() < p:
             generated.appendleft(0)
         else:
