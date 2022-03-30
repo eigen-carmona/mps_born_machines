@@ -982,6 +982,17 @@ def learning_epoch_sgd(mps, imgs, epochs, lr, batch_size = 25,**kwargs):
 
     # cha cha real smooth
 
+def arr_psi_primed_cache(_imgs,img_cache,index):
+    # Extract the cache and free legs
+    left_cache = img_cache[:,0,index]
+    right_cache = img_cache[:,1,index+1]
+    left_imgs = _imgs[:,index]
+    right_imgs = _imgs[:,index+1]
+
+    # Contract in parallel
+    psi_primed_arr = tneinsum3(left_cache,right_cache,left_imgs,right_imgs)
+    return psi_primed_arr
+
 def learning_step_cached(mps, index, _imgs, lr, img_cache, going_right = True, **kwargs):
     '''
     Compute the updated merged tensor A_{index,index+1}
@@ -995,15 +1006,7 @@ def learning_step_cached(mps, index, _imgs, lr, img_cache, going_right = True, *
 
     # Computing the second term, summation over
     # the data-dependent terms
-
-    # Extract the cache and free legs
-    left_cache = img_cache[:,0,index]
-    right_cache = img_cache[:,1,index+1]
-    left_imgs = _imgs[:,index]
-    right_imgs = _imgs[:,index+1]
-
-    # Contract in parallel
-    psi_primed_arr = tneinsum3(left_cache,right_cache,left_imgs,right_imgs)
+    psi_primed_arr = arr_psi_primed_cache(_imgs,img_cache,index)
 
     # Generate magical terms
     psi = tneinsum3(np.array(len(_imgs)*[A]),psi_primed_arr)
