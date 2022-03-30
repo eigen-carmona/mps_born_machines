@@ -70,7 +70,50 @@ def pro_profiler(func):
     ps.print_stats()
     print(s.getvalue())
     return s
-         
+
+class mps_lr:
+    def __init__(self, mps, lr0, momentum, s_factor):
+        self.sites = len(mps.tensors)
+        self.lr0 = lr0
+        self.curr_lr = self.lr0
+        self.momentum = momentum
+        self.t = 0
+        self.s_factor = s_factor
+        self.past_grad = (self.sites-1)*[0]
+        
+    
+    def clear(self):
+        self.t = 0
+    
+    def compute_lr(self, t):
+        '''
+        Lr will be annealed each epoch through an exponential function that
+        takes into account the baseline value
+        '''
+        return ((self.lr0)*np.exp(-self.s_factor*self.t  ) )
+    
+    def new_epoch(self):
+        '''
+        Update curr lr to the next timestep
+        '''
+        self.t = self.t + 1
+        self.curr_lr = self.compute_lr(self.t)
+    
+    def J(self, left_index, dNLL):
+        '''
+        J^{k+1} = \beta J^{k} + dNLL^{k}
+        A^{k+1} = A^{k} - lr* J^{k+1}
+        '''
+        if self.t > 0:
+            J = self.momentum * self.past_grad[left_index] + dNLL
+        else:
+            J = dNLL
+        
+        self.past_grad[left_index] = np.mean(dNLL.data)/dNLL.data.max()
+        
+        return J
+            
+        
 #   ___     
 #  |_  |    
 #   _| |_ _ 
@@ -1017,7 +1060,7 @@ def learning_step_cached(mps, index, _imgs, lr, img_cache, going_right = True, *
     # Derivative of the NLL
     dNLL = (A/Z) - psifrac
     
-    A = A - lr*dNLL # Update A_{i,i+1}
+    A = A - lr.curr_lr*lr.J(index, dNLL) # Update A_{i,i+1}
     A = A/A.data.max()#np.sqrt( tneinsum2(A,A).data )
     # Now the tensor A_{i,i+1} must be split in I_k and I_{k+1}.
     # To preserve canonicalization:
@@ -1084,6 +1127,7 @@ def learning_epoch_cached(mps, _imgs, epochs, lr,img_cache,batch_size = 25,**kwa
             if index == len(mps.tensors)-2:
                 going_right = False
         nll = computeNLL_cached(mps, _imgs, img_cache,0)
+        lr.new_epoch()
         print('NLL: {} | Baseline: {}'.format(nll, np.log(len(_imgs)) ) )
         cost.append(nll)
     # cha cha real smooth
