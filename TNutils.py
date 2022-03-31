@@ -35,6 +35,7 @@ import functools
 import collections
 import opt_einsum as oe
 import itertools
+import pydash as _pd
 import copy
 import os
 #######################################################
@@ -1037,7 +1038,15 @@ def arr_psi_primed_cache(_imgs,img_cache,index):
     psi_primed_arr = tneinsum3(left_cache,right_cache,left_imgs,right_imgs)
     return psi_primed_arr
 
-def learning_step_cached(mps, index, _imgs, lr, img_cache, going_right = True, **kwargs):
+def learning_step_cached(
+    mps,
+    index,
+    _imgs,
+    lr,
+    img_cache,
+    going_right = True,
+    update_wrap = lambda site,div: div,
+    **kwargs):
     '''
     Compute the updated merged tensor A_{index,index+1}
     
@@ -1060,7 +1069,7 @@ def learning_step_cached(mps, index, _imgs, lr, img_cache, going_right = True, *
     # Derivative of the NLL
     dNLL = (A/Z) - psifrac
     
-    A = A - lr.curr_lr*lr.J(index, dNLL) # Update A_{i,i+1}
+    A = A - _pd.get(lr,'curr_lr',lr)*update_wrap(index, dNLL) # Update A_{i,i+1}
     A = A/A.data.max()#np.sqrt( tneinsum2(A,A).data )
     # Now the tensor A_{i,i+1} must be split in I_k and I_{k+1}.
     # To preserve canonicalization:
