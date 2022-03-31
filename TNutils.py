@@ -35,6 +35,7 @@ import functools
 import collections
 import opt_einsum as oe
 import itertools
+import pydash as _pd
 import copy
 import os
 #######################################################
@@ -1037,7 +1038,15 @@ def arr_psi_primed_cache(_imgs,img_cache,index):
     psi_primed_arr = tneinsum3(left_cache,right_cache,left_imgs,right_imgs)
     return psi_primed_arr
 
-def learning_step_cached(mps, index, _imgs, lr, img_cache, going_right = True, **kwargs):
+def learning_step_cached(
+    mps,
+    index,
+    _imgs,
+    lr,
+    img_cache,
+    going_right = True,
+    update_wrap = lambda site,div: div,
+    **kwargs):
     '''
     Compute the updated merged tensor A_{index,index+1}
     
@@ -1060,7 +1069,7 @@ def learning_step_cached(mps, index, _imgs, lr, img_cache, going_right = True, *
     # Derivative of the NLL
     dNLL = (A/Z) - psifrac
     
-    A = A - lr.curr_lr*lr.J(index, dNLL) # Update A_{i,i+1}
+    A = A - _pd.get(lr,'curr_lr',lr)*update_wrap(index, dNLL) # Update A_{i,i+1}
     A = A/A.data.max()#np.sqrt( tneinsum2(A,A).data )
     # Now the tensor A_{i,i+1} must be split in I_k and I_{k+1}.
     # To preserve canonicalization:
@@ -1089,7 +1098,16 @@ def learning_step_cached(mps, index, _imgs, lr, img_cache, going_right = True, *
     # SD.tensors[1] -> I_{index+1}
     return SD
 
-def learning_epoch_cached(mps, _imgs, epochs, lr,img_cache,batch_size = 25,**kwargs):
+def learning_epoch_cached(
+    mps,
+    _imgs,
+    epochs,
+    initial_lr,
+    img_cache,
+    batch_size = 25,
+    update_wrap = lambda site, div: div,
+    lr_update = lambda lr: lr,
+    **kwargs):
     '''
     Manages the sliding left and right.
     From tensor 1 (the second), apply learning_step() sliding to the right
@@ -1100,6 +1118,7 @@ def learning_epoch_cached(mps, _imgs, epochs, lr,img_cache,batch_size = 25,**kwa
     guide = np.arange(len(_imgs))
     # Execute the epochs
     cost = []
+    lr = copy.copy(initial_lr)
     for epoch in range(epochs):
         print(f'epoch {epoch+1}/{epochs}')
         # [1,2,...,780,781,780,...,2,1]
@@ -1111,7 +1130,15 @@ def learning_epoch_cached(mps, _imgs, epochs, lr,img_cache,batch_size = 25,**kwa
         for index in progress:
             np.random.shuffle(guide)
             mask = guide[:batch_size]
-            A = learning_step_cached(mps,index,_imgs[mask],lr,img_cache[mask],going_right,**kwargs)
+            A = learning_step_cached(
+                mps,
+                index,
+                _imgs[mask],
+                lr,
+                img_cache[mask],
+                going_right,
+                update_wrap,
+                **kwargs)
             if index == 0:
                 mps.tensors[index].modify(data=np.transpose(A.tensors[0].data,(1,0)))
                 mps.tensors[index+1].modify(data=A.tensors[1].data)
@@ -1127,11 +1154,11 @@ def learning_epoch_cached(mps, _imgs, epochs, lr,img_cache,batch_size = 25,**kwa
             if index == len(mps.tensors)-2:
                 going_right = False
         nll = computeNLL_cached(mps, _imgs, img_cache,0)
-        lr.new_epoch()
+        lr = lr_update(lr)
         print('NLL: {} | Baseline: {}'.format(nll, np.log(len(_imgs)) ) )
         cost.append(nll)
     # cha cha real smooth
-    return cost
+    return cost, lr
 
 def cached_stochastic_learning_epoch(mps, val_imgs, _imgs, epochs, lr,img_cache,last_dirs,last_sites,last_epochs,batch_size = 25,**kwargs):
     '''
