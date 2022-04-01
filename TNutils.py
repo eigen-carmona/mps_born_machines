@@ -6,6 +6,8 @@
 import numpy as np
 import cytoolz
 import dask as ds
+from dask.array import Array as daskarr
+import dask.array as da
 
 # Deep Learning stuff
 import torch
@@ -476,7 +478,30 @@ def left_right_cache(mps,_imgs):
     img_cache = np.array([curr_l,curr_r]).transpose((1,0,2))
     return img_cache
 
+def ext_left_right_cache(mps,_imgs):
+    # WARNING: THIS IS EXTREMELY SLOW.
+    # It's more convenient to initialize on RAM and convert to dask array
+    curr_l = da.from_array(len(_imgs)*[qtn.Tensor()], chunks = (len(_imgs)))
+    curr_l = curr_l.reshape((len(_imgs),1))
+    for site in range(len(mps.tensors)-1):
+        machines = np.array(len(_imgs)*[mps[site]])
+        contr_l = tneinsum3(curr_l[:,-1].compute(),machines,_imgs[:,site])
+        contr_l = da.from_array(contr_l.reshape((len(_imgs),1)),chunks = (len(_imgs)))
+        curr_l = da.hstack((curr_l,contr_l))
+    curr_r = da.from_array(len(_imgs)*[qtn.Tensor()], chunks = (len(_imgs)))
+    curr_r = curr_r.reshape((len(_imgs),1))
+    for site in range(len(mps.tensors)-1,0,-1):
+        machines = np.array(len(_imgs)*[mps[site]])
+        contr_r = tneinsum3(curr_r[:,0].compute(),machines,_imgs[:,site])
+        contr_r = da.from_array(contr_r.reshape((len(_imgs),1)),chunks = (len(_imgs)))
+        curr_r = da.hstack((contr_r,curr_r))
+    img_cache = da.from_array([curr_l,curr_r],chunks = (1,len(_imgs),1)).transpose((1,0,2))
+    return img_cache
+
+
 def sequential_update(mps,_imgs,img_cache,site,going_right):
+    if type(img_cache) == daskarr:
+        return ext_sequential_update(mps,_imgs,img_cache,site,going_right)
     if going_right:
         left_cache = img_cache[:,0,site]
         left_imgs = _imgs[:,site]
@@ -496,6 +521,18 @@ def sequential_update(mps,_imgs,img_cache,site,going_right):
         maxa = np.abs(data).max(axis = axes)
         data = data/maxa.reshape((len(_imgs),1))
         new_cache = into_tensarr(data,new_cache[0].inds)
+        img_cache[:,1,site] = new_cache
+
+def ext_sequential_update(mps,_imgs,img_cache,site,going_right):
+    if going_right:
+        left_cache = img_cache[:,0,site].compute()
+        left_imgs = _imgs[:,site]
+        new_cache = tneinsum3(left_cache,np.array(len(_imgs)*[mps[site]]),left_imgs)
+        img_cache[:,0,site+1] = new_cache
+    else:
+        right_cache = img_cache[:,1,site+1].compute()
+        right_imgs = _imgs[:,site+1]
+        new_cache = tneinsum3(right_cache,np.array(len(_imgs)*[mps[site+1]]),right_imgs)
         img_cache[:,1,site] = new_cache
 
 def restart_cache(mps,site,left_cache,right_cache,_img):
@@ -1046,9 +1083,22 @@ def learning_epoch_sgd(mps, imgs, epochs, lr, batch_size = 25,**kwargs):
     # cha cha real smooth
 
 def arr_psi_primed_cache(_imgs,img_cache,index):
+    if type(img_cache) == daskarr:
+        return ext_arr_psi_primed_cache(_imgs,img_cache,index)
     # Extract the cache and free legs
     left_cache = img_cache[:,0,index]
     right_cache = img_cache[:,1,index+1]
+    left_imgs = _imgs[:,index]
+    right_imgs = _imgs[:,index+1]
+
+    # Contract in parallel
+    psi_primed_arr = tneinsum3(left_cache,right_cache,left_imgs,right_imgs)
+    return psi_primed_arr
+
+def ext_arr_psi_primed_cache(_imgs,img_cache,index):
+    # Extract the cache and free legs
+    left_cache = img_cache[:,0,index].compute()
+    right_cache = img_cache[:,1,index+1].compute()
     left_imgs = _imgs[:,index]
     right_imgs = _imgs[:,index+1]
 
