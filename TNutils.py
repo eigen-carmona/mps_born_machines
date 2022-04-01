@@ -456,6 +456,10 @@ def left_right_cache(mps,_imgs):
     for site in range(len(mps.tensors)-1):
         machines = np.array(len(_imgs)*[mps[site]])
         contr_l = tneinsum3(curr_l[:,-1],machines,_imgs[:,site])
+        data = into_data(contr_l)
+        maxa = np.abs(data).max(axis = tuple(range(1,len(data.shape))))
+        data = data/maxa.reshape((len(_imgs),1))
+        contr_l = into_tensarr(data,contr_l[0].inds)
         contr_l = contr_l.reshape((len(_imgs),1))
         curr_l = np.hstack([curr_l,contr_l])
     curr_r = np.array(len(_imgs)*[qtn.Tensor()])
@@ -463,6 +467,10 @@ def left_right_cache(mps,_imgs):
     for site in range(len(mps.tensors)-1,0,-1):
         machines = np.array(len(_imgs)*[mps[site]])
         contr_r = tneinsum3(curr_r[:,0],machines,_imgs[:,site])
+        data = into_data(contr_r)
+        maxa = np.abs(data).max(axis = tuple(range(1,len(data.shape))))
+        data = data/maxa.reshape((len(_imgs),1))
+        contr_r = into_tensarr(data,contr_r[0].inds)
         contr_r = contr_r.reshape((len(_imgs),1))
         curr_r = np.hstack([contr_r,curr_r])
     img_cache = np.array([curr_l,curr_r]).transpose((1,0,2))
@@ -473,11 +481,21 @@ def sequential_update(mps,_imgs,img_cache,site,going_right):
         left_cache = img_cache[:,0,site]
         left_imgs = _imgs[:,site]
         new_cache = tneinsum3(left_cache,np.array(len(_imgs)*[mps[site]]),left_imgs)
+        data = into_data(new_cache)
+        axes = tuple(range(1,len(data.shape)))
+        maxa = np.abs(data).max(axis = axes)
+        data = data/maxa.reshape((len(_imgs),1))
+        new_cache = into_tensarr(data,new_cache[0].inds)
         img_cache[:,0,site+1] = new_cache
     else:
         right_cache = img_cache[:,1,site+1]
         right_imgs = _imgs[:,site+1]
         new_cache = tneinsum3(right_cache,np.array(len(_imgs)*[mps[site+1]]),right_imgs)
+        data = into_data(new_cache)
+        axes = tuple(range(1,len(data.shape)))
+        maxa = np.abs(data).max(axis = axes)
+        data = data/maxa.reshape((len(_imgs),1))
+        new_cache = into_tensarr(data,new_cache[0].inds)
         img_cache[:,1,site] = new_cache
 
 def restart_cache(mps,site,left_cache,right_cache,_img):
@@ -1100,6 +1118,7 @@ def learning_step_cached(
 
 def learning_epoch_cached(
     mps,
+    val_imgs,
     _imgs,
     epochs,
     initial_lr,
@@ -1153,7 +1172,7 @@ def learning_epoch_cached(
 
             if index == len(mps.tensors)-2:
                 going_right = False
-        nll = computeNLL_cached(mps, _imgs, img_cache,0)
+        nll = computeNLL(mps,val_imgs,0)#computeNLL_cached(mps, _imgs, img_cache,0)
         lr = lr_update(lr)
         print('NLL: {} | Baseline: {}'.format(nll, np.log(len(_imgs)) ) )
         cost.append(nll)
