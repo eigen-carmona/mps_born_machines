@@ -41,7 +41,6 @@ import pydash as _pd
 import copy
 import os
 #######################################################
-
 '''
 Wrapper for type checks.
 While defining a function, you can add the wrapper
@@ -179,7 +178,7 @@ def get_data(train_size = 1000, test_size = 100, grayscale_threshold = .5):
     # Return training set and test set
     return npmnist[:train_size], npmnist[train_size:]
 
-def plot_img(img_flat, shape, flip_color = True, border = False, savefig = ''):
+def plot_img(img_flat, shape, flip_color = True, border = False, savefig = '', title=''):
     '''
     Display the image from the flattened form
     '''
@@ -188,6 +187,9 @@ def plot_img(img_flat, shape, flip_color = True, border = False, savefig = ''):
         img_flat = np.copy(img_flat)
         img_flat[img_flat == -1] = 0
     plt.figure(figsize = (2,2))
+    
+    if title != '':
+        plt.title(title)
     # Background white, strokes black
     if flip_color:
         plt.imshow(1-np.reshape(img_flat,shape), cmap='gray')
@@ -1305,7 +1307,7 @@ def generate_samples(mps,N):
     # Assumption: mps is right-canonized
     # Sampling first pixel. Only one probability has to be measured
     ampl = mps[0]@one(0)
-    p = ampl@ampl
+    p = ampl@ampl/(mps[0]@mps[0])
     # Generate a random sample for the first pixel of each image:
     rand = np.random.random(N)
     # Which are valid?
