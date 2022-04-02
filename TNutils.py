@@ -1162,10 +1162,13 @@ def arr_psi_primed_torched(torch_imgs,torch_cache,index,mask,inds_dict):
         tensors = tensors + [right_cache]
     # Contract in parallel
     psi_primed_arr, inds_out = torch_multicontract(tuple(inds_in),*tensors)
+    del left_cache,right_cache,left_imgs,right_imgs,tensors
+    torch.cuda.empty_cache()
     return psi_primed_arr, inds_out
 
 def learning_step_torched(
     mps,
+    torch_mps,
     index,
     torch_imgs,
     lr,
@@ -1196,9 +1199,11 @@ def learning_step_torched(
     #psifrac = sum(psi_primed_arr/into_data(psi))
     #psifrac = psifrac/len(torch_imgs)
     inds_in = [inds_dict['mps'][index],inds_dict['mps'][index+1]]
-    _A, inds_out = torch_multicontract(tuple(inds_in),torch_mps[index],torch_mps[index+1])
+    _A, inds_out = torch_contract(tuple(inds_in),torch_mps[index],torch_mps[index+1])
     _inds_in = [inds_out,_inds_out]
-    _psi, _ = torch_multicontract(tuple(_inds_in),_A,_psi_primed_arr)
+    _psi, _ = torch_multicontract(tuple(_inds_in),
+                                  torch.unsqueeze(_A,0)[len(mask)*[0]],
+                                  _psi_primed_arr)
     #if not np.allclose(_psi.cpu().detach().numpy(),into_data(psi)):
     #    print('We have an issue')
     #    print(_psi.cpu().detach().numpy())
@@ -1213,10 +1218,12 @@ def learning_step_torched(
         new_shape.append(1)
     _psifrac = _psi_primed_arr/torch.reshape(_psi,tuple(new_shape))
     _psifrac = torch.sum(_psifrac, dim = 0)/len(mask)
-    _dNLL = _A[0]/Z
+    _dNLL = _A/Z
     _dNLL = _dNLL.permute(tuple(np.argsort(inds_out))) - _psifrac.permute(tuple(np.argsort(_inds_out)))
     inds_out = tuple(np.sort(inds_out))
     dNLL = qtn.Tensor(data = _dNLL.cpu().detach().numpy(),inds = inds_out)
+    del _dNLL,_psifrac,_psi,_A,_psi_primed_arr
+    torch.cuda.empty_cache()
     # Derivative of the NLL
     #dNLL = (A/Z) - psifrac
     #if not np.allclose(_dNLL.cpu().detach().numpy(),dNLL.data.transpose(tuple(np.argsort(dNLL.inds)))):
@@ -1260,10 +1267,10 @@ def sequential_update_torched(torch_mps,torch_imgs,torch_cache,site,going_right,
     target = site + 1*going_right
     side = 'left'*going_right+'right'*(not going_right)
     l = int(not going_right)
-
+    size = torch_imgs[current].shape[0]
     tens_cache = torch_cache[0,l,current]
     tens_imgs = torch_imgs[current]
-    tens_mps = torch_mps[current]
+    tens_mps = torch.unsqueeze(torch_mps[current],0)[size*[0]]
     imgs_l_inds = inds_dict['imgs'][current]
     mps_l_inds = inds_dict['mps'][current]
     tens_inds = inds_dict[side][current]
@@ -1318,6 +1325,7 @@ def learning_epoch_torched(
             mask = guide[:batch_size]
             A = learning_step_torched(
                 mps,
+                torch_mps,
                 index,
                 torch_imgs,
                 lr,
@@ -1335,7 +1343,7 @@ def learning_epoch_torched(
                 mps.tensors[index+1].modify(data=A.tensors[1].data)
 
             # update the torched mps
-            tens = torch.from_numpy(np.array(len(imgs)*[mps[index].data],dtype = np.float32))
+            tens = torch.from_numpy(np.array(mps[index].data,dtype = np.float32))
             if torch.cuda.is_available():
                 tens = tens.to('cuda')
             #else:
@@ -1343,7 +1351,7 @@ def learning_epoch_torched(
             torch_mps[index] = tens
             # Update also the reference dictionary
             inds_dict['mps'][index] = mps[index].inds
-            tens = torch.from_numpy(np.array(len(imgs)*[mps[index+1].data],dtype = np.float32))
+            tens = torch.from_numpy(np.array(mps[index+1].data,dtype = np.float32))
             if torch.cuda.is_available():
                 tens = tens.to('cuda')
             #else:
