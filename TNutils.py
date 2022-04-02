@@ -1106,6 +1106,24 @@ def ext_arr_psi_primed_cache(_imgs,img_cache,index):
     psi_primed_arr = tneinsum3(left_cache,right_cache,left_imgs,right_imgs)
     return psi_primed_arr
 
+def torch_contract(inds_in,*tensor_lists):
+    '''
+    Takes arrays of tensors and contracts them element by element.
+    '''
+    # Generate a list of arrays of numpy tensors
+    tens_data = [ten.data for ten in tensor_lists]
+    # Output indeces
+    inds_out = tuple(qtn.tensor_core._gen_output_inds(cytoolz.concat(inds_in)))
+    # Convert into einsum expression with extra index for entries
+    eq = _inds_to_eq(inds_in, inds_out)
+    # Extract the shapes
+    shapes = [tens.shape for tens in tens_data]
+    # prepare opteinsum reduction expression
+    expr = oe.contract_expression(eq,*shapes)
+    # execute and extract
+    data_arr = expr(*tens_data,backend = 'torch')
+    return data_arr,inds_out
+
 def torch_multicontract(inds_in,*tensor_lists):
     '''
     Takes arrays of tensors and contracts them element by element.
