@@ -1169,18 +1169,44 @@ def learning_step_torched(
 
     # Computing the second term, summation over
     # the data-dependent terms
-    psi_primed_arr, inds_out = arr_psi_primed_torched(torch_imgs,torch_cache,index,mask,inds_dict)
+    _psi_primed_arr, _inds_out = arr_psi_primed_torched(torch_imgs,torch_cache,index,mask,inds_dict)
     # TODO: aren't we supposed to be exploiting torch here?
-    psi_primed_arr = psi_primed_arr.cpu().detach().numpy()
-    psi_primed_arr = into_tensarr(psi_primed_arr, inds_out)
-    # Generate magical terms
-    psi = tneinsum3(np.array(len(mask)*[A]),psi_primed_arr)
-    psifrac = sum(psi_primed_arr/into_data(psi))
-    psifrac = psifrac/len(torch_imgs)
-
+    #psi_primed_arr = _psi_primed_arr.cpu().detach().numpy()
+    #psi_primed_arr = into_tensarr(psi_primed_arr, _inds_out)
+    ## Generate magical terms
+    #psi = tneinsum3(np.array(len(mask)*[A]),psi_primed_arr)
+    #psifrac = sum(psi_primed_arr/into_data(psi))
+    #psifrac = psifrac/len(torch_imgs)
+    inds_in = [inds_dict['mps'][index],inds_dict['mps'][index+1]]
+    _A, inds_out = torch_multicontract(tuple(inds_in),torch_mps[index],torch_mps[index+1])
+    _inds_in = [inds_out,_inds_out]
+    _psi, _ = torch_multicontract(tuple(_inds_in),_A,_psi_primed_arr)
+    #if not np.allclose(_psi.cpu().detach().numpy(),into_data(psi)):
+    #    print('We have an issue')
+    #    print(_psi.cpu().detach().numpy())
+    #    print()
+    #    print(into_data(psi))
+    #    raise Exception()
+    #if A.inds != inds_out:
+    #    print(A.inds,inds_out)
+    #    raise Exception('FUCK')
+    new_shape = [len(mask),1,1,1]
+    if index not in [0,len(torch_mps)-2]:
+        new_shape.append(1)
+    _psifrac = _psi_primed_arr/torch.reshape(_psi,tuple(new_shape))
+    _psifrac = torch.sum(_psifrac, dim = 0)/len(mask)
+    _dNLL = _A[0]/Z
+    _dNLL = _dNLL.permute(tuple(np.argsort(inds_out))) - _psifrac.permute(tuple(np.argsort(_inds_out)))
+    inds_out = tuple(np.sort(inds_out))
+    dNLL = qtn.Tensor(data = _dNLL.cpu().detach().numpy(),inds = inds_out)
     # Derivative of the NLL
-    dNLL = (A/Z) - psifrac
-
+    #dNLL = (A/Z) - psifrac
+    #if not np.allclose(_dNLL.cpu().detach().numpy(),dNLL.data.transpose(tuple(np.argsort(dNLL.inds)))):
+    #    print('We have an issue')
+    #    print(_dNLL.cpu().detach().numpy())
+    #    print()
+    #    print(dNLL.data.transpose(tuple(np.argsort(dNLL.inds))))
+    #    raise Exception()
     A = A - _pd.get(lr,'curr_lr',lr)*update_wrap(index, dNLL) # Update A_{i,i+1}
     #A = A/A.data.max()#np.sqrt( tneinsum2(A,A).data )
     # Now the tensor A_{i,i+1} must be split in I_k and I_{k+1}.
@@ -1225,13 +1251,14 @@ def sequential_update_torched(torch_mps,torch_imgs,torch_cache,site,going_right,
     tens_inds = inds_dict[side][current]
     inds_in = [mps_l_inds,imgs_l_inds]
     tensors = [tens_mps,tens_imgs]
-    if current != 0:
-        tensors = [tens_cache] + tensors
-        inds_in = [tens_inds] + inds_in
+    #if current != 0:
+    tensors = [tens_cache] + tensors
+    inds_in = [tens_inds] + inds_in
     data, inds_out = torch_multicontract(tuple(inds_in),*tensors)
     #axes = tuple(range(1,len(data.shape)))
     #maxa = torch.reshape(torch.max(torch.abs(data), dim=1),(len(torch_imgs),1))
-    new_cache = data#.to('cuda')#/maxa
+    new_cache = data/torch.max(data,dim=1,keepdim = True)[0].to('cuda')#/maxa
+    #print(torch.max(data,dim=1,keepdim = True)[0].shape)
     # TODO: Is the dictionary actualy changing?
     inds_dict[side][target] = inds_out
     torch_cache[0,l,target] = new_cache
@@ -1293,26 +1320,44 @@ def learning_epoch_torched(
             tens = torch.from_numpy(np.array(len(imgs)*[mps[index].data],dtype = np.float32))
             if torch.cuda.is_available():
                 tens = tens.to('cuda')
+            #else:
+            #    tens = tens.to('cpu')
             torch_mps[index] = tens
             # Update also the reference dictionary
             inds_dict['mps'][index] = mps[index].inds
             tens = torch.from_numpy(np.array(len(imgs)*[mps[index+1].data],dtype = np.float32))
             if torch.cuda.is_available():
                 tens = tens.to('cuda')
+            #else:
+            #    tens = tens.to('cpu')
             torch_mps[index+1] = tens
             inds_dict['mps'][index+1] = mps[index+1].inds
 
             # Update the cache for all images (for all? really?)
             sequential_update_torched(torch_mps,torch_imgs,torch_cache,index,going_right,inds_dict)
+            # Place stuff where it belongs:
+            if going_right and index < len(torch_mps) - 2:
+                torch_mps[index] = torch_mps[index].to('cpu')
+                torch_mps[index+2] = torch_mps[index+2].to('cuda')
+                # Current index goes to cpu
+                # index + 1 stays
+                # index + 2 is placed in gpu
+            if not going_right and index > 0:
+                torch_mps[index+1] = torch_mps[index+1].to('cpu')
+                torch_mps[index-1] = torch_mps[index-1].to('cuda')
+                # index + 1 goes to cpu
+                # index stays
+                # index - 1 is placed in gpu
             #p0 = computepsi(mps,imgs[0])**2
             progress.set_description('Left Index: {}'.format(index))
 
             if index == len(mps.tensors)-2:
                 going_right = False
-        nll = computeNLL(mps,imgs,0)#computeNLL_cached(mps, _imgs, img_cache,0)
+            torch.cuda.empty_cache()
+        #nll = computeNLL(mps,imgs,0)#computeNLL_cached(mps, _imgs, img_cache,0)
         lr = lr_update(lr)
-        print('NLL: {} | Baseline: {}'.format(nll, np.log(len(imgs)) ) )
-        cost.append(nll)
+        #print('NLL: {} | Baseline: {}'.format(nll, np.log(len(imgs)) ) )
+        #cost.append(nll)
     # cha cha real smooth
     return cost, lr
 
