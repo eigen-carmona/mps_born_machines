@@ -1276,6 +1276,64 @@ def cached_stochastic_learning_epoch(mps, val_imgs, _imgs, epochs, lr,img_cache,
     return cost
     # cha cha real smooth
 
+def lr_update(lr):
+    lr.new_epoch()
+    return lr
+    
+def training_and_probing(
+    period_epochs,
+    periods,
+    mps,
+    shape,
+    imgs,
+    _imgs,
+    img_cache,
+    batch_size,
+    lr,
+    lr_update,
+    update_wrap,
+    val_imgs = [],
+    period_samples = 0,
+    corrupted_set = None,
+    plot = False,
+    **kwargs):
+    # Initialize the training costs
+    train_costs = [computeNLL(mps, imgs,0)]
+    #train_costs = []
+
+    # TODO: adapt computeNLL to tneinsum3
+    val_costs = []
+    if len(val_imgs)>0:
+        # Initialize the validation costs
+        val_costs.append(computeNLL(mps, val_imgs, 0))
+
+
+    samples = []
+    
+    # begin the iteration
+    for period in range(periods):
+        costs, lr = learning_epoch_cached(mps,imgs,_imgs,period_epochs,lr,img_cache,
+                                          lr_update = lr_update,update_wrap = update_wrap,
+                                          batch_size = batch_size,**kwargs)
+        train_costs.extend(costs)
+        if len(val_imgs)>0:
+            val_costs.append(computeNLL(mps, val_imgs, 0))
+         
+        # Save MPS 
+        mps_checkpoint(mps, imgs, val_imgs, period, periods, train_costs, val_costs)
+        
+        # Plot and Save Loss curve
+        if plot:
+            plot_nll(train_costs,np.log(len(_imgs)),mps,imgs,val_costs, period_epochs)
+            plt.show()
+        
+        # Save Generated Images SVG and NPY
+        if period_samples > 0:
+            samples.append(generate_and_save(mps, period_samples, period, periods, imgs, shape))
+            
+    return train_costs, samples
+        
+    
 #   _  _    
 #  | || |   
 #  | || |_  
@@ -1674,9 +1732,6 @@ def bars_n_stripes(N_samples, dim = 4):
             
     return samples
 
-            
-    return samples
-
 def save_mps_sets(mps, train_set, foldname, test_set = []):
     # If folder does not exists
     if not os.path.exists('./'+foldname):
@@ -1728,3 +1783,79 @@ def meanpool2d(npmnist, shape, grayscale_threshold = 0.3):
     ds_imgs[ds_imgs <= grayscale_threshold] = 0
     
     return ds_imgs
+
+def mps_checkpoint(mps, imgs, val_imgs, period, periods, train_cost, val_cost):
+    # Save the mps
+    oldfilename = str(period-1)+'I'+str(periods-1)
+    filename = str(period)+'I'+str(periods-1)
+    foldname = 'T'+str(len(imgs))+'_L'+str(len(mps.tensors))
+    # If folder does not exists
+    if not os.path.exists('./'+foldname):
+        # Make the folder
+        os.makedirs('./'+foldname)
+    
+    if os.path.isfile('./'+foldname+'/'+oldfilename+'.mps'):
+        os.remove('./'+foldname+'/'+oldfilename+'.mps')
+        
+    quimb.utils.save_to_disk(mps, './'+foldname+'/'+filename+'.mps')
+    
+    # Save training and val loss
+    np.save('./'+foldname+'/trainloss', train_cost)
+    np.save('./'+foldname+'/valloss', val_cost)
+    
+    # Save img and val_img
+    if period == 0:
+        np.save('./'+foldname+'/train_set.npy', imgs)
+        np.save('./'+foldname+'/val_set.npy', val_imgs)
+        
+def generate_and_save(mps, period_samples, period, periods, imgs, shape):
+    # If images are more than one, we display using subplots
+    if period_samples > 1:
+        # Generate images
+        gen_imgs = generate_samples(mps,period_samples)
+        # Create the subfolder for gen_imgs if it does not exists
+        if not os.path.exists('./'+'T'+str(len(imgs))+'_L'+str(len(mps.tensors))+'/gen_imgs'):
+            os.mkdir('./'+'T'+str(len(imgs))+'_L'+str(len(mps.tensors))+'/gen_imgs')
+
+        fig, ax = plt.subplots(1, period_samples, figsize=(2*period_samples,2))
+        for i in range(period_samples):
+            ax[i].imshow(1-gen_imgs[i].reshape(shape), cmap='gray')
+            ax[i].set_xticks([])
+            ax[i].set_yticks([])
+        fig.suptitle('Generated images: {}/{}'.format(period+1,periods))
+        plt.savefig('./'+'T'+str(len(imgs))+'_L'+str(len(mps.tensors))+'/gen_imgs/'+str(period), format='svg')
+    
+    # if period_samples == 1, we display using plot_img function    
+    else:
+        # Generate images
+        gen_imgs = generate_sample(mps)
+        # Create the subfolder for gen_imgs if it does not exists
+        if not os.path.exists('./'+'T'+str(len(imgs))+'_L'+str(len(mps.tensors))+'/gen_imgs'):
+            os.mkdir('./'+'T'+str(len(imgs))+'_L'+str(len(mps.tensors))+'/gen_imgs')
+
+        plot_img(gen_imgs, shape, border = True, 
+                 title = 'Generated image: {}/{}'.format(period,periods),
+                 savefig = './T'+str(len(imgs))+'_L'+str(len(mps.tensors))+'/gen_imgs/'+str(period) )
+    plt.show()
+    
+    # Save the npy of the current generated images
+    np.save('./T'+str(len(imgs))+'_L'+str(len(mps.tensors))+'/gen_imgs/'+str(period)+'.npy', gen_imgs)
+    
+    return gen_imgs
+
+def plot_nll(nlls,baseline,mps,imgs,val_nlls,period_epochs = 1):
+    plt.plot(range(len(nlls)),nlls, label='training set')
+    plt.title('Negative log-likelihood')
+    plt.axhline(baseline,color = 'r', linestyle= 'dashed', label='baseline')
+    if len(val_nlls) > 0:
+        plt.plot(range(0,len(nlls),period_epochs),val_nlls, label='test set')
+    plt.legend()
+    step = np.round(len(nlls)/10).astype(int)
+    if step == 0: step = 1
+    plt.xticks(range(0,len(nlls),step)) # Ticks only show integers (epochs)
+    plt.xlabel('epochs')
+    plt.ylabel(r'$\mathcal{L}$')
+    if not os.path.exists('./'+'T'+str(len(imgs))+'_L'+str(len(mps.tensors))):
+            os.mkdir('./'+'T'+str(len(imgs))+'_L'+str(len(mps.tensors)))
+    plt.savefig('./'+'T'+str(len(imgs))+'_L'+str(len(mps.tensors))+'/loss', format='svg')
+    
