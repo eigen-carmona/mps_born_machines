@@ -1329,7 +1329,7 @@ def training_and_probing(
         
         # Save Generated Images SVG and NPY
         if period_samples > 0:
-            samples.append(generate_and_save(mps, period_samples, period, periods, imgs, shape))
+            samples.append(generate_and_save(mps, period_samples, period, periods, period_epochs, imgs, shape))
             
     return train_costs, samples
         
@@ -1808,7 +1808,7 @@ def mps_checkpoint(mps, imgs, val_imgs, period, periods, train_cost, val_cost):
         np.save('./'+foldname+'/train_set.npy', imgs)
         np.save('./'+foldname+'/val_set.npy', val_imgs)
         
-def generate_and_save(mps, period_samples, period, periods, imgs, shape):
+def generate_and_save(mps, period_samples, period, periods, period_epochs, imgs, shape):
     # If images are more than one, we display using subplots
     if period_samples > 1:
         # Generate images
@@ -1822,7 +1822,7 @@ def generate_and_save(mps, period_samples, period, periods, imgs, shape):
             ax[i].imshow(1-gen_imgs[i].reshape(shape), cmap='gray')
             ax[i].set_xticks([])
             ax[i].set_yticks([])
-        fig.suptitle('Generated images: {}/{}'.format(period+1,periods))
+        fig.suptitle('Generated images: {}/{}'.format(period_epochs*(period+1),period_epochs*periods))
         plt.savefig('./'+'T'+str(len(imgs))+'_L'+str(len(mps.tensors))+'/gen_imgs/'+str(period), format='svg')
     
     # if period_samples == 1, we display using plot_img function    
@@ -1834,7 +1834,7 @@ def generate_and_save(mps, period_samples, period, periods, imgs, shape):
             os.mkdir('./'+'T'+str(len(imgs))+'_L'+str(len(mps.tensors))+'/gen_imgs')
 
         plot_img(gen_imgs, shape, border = True, 
-                 title = 'Generated image: {}/{}'.format(period,periods),
+                 title = 'Generated image: {}/{}'.format(period_epochs*(period+1),period_epochs*periods),
                  savefig = './T'+str(len(imgs))+'_L'+str(len(mps.tensors))+'/gen_imgs/'+str(period) )
     plt.show()
     
