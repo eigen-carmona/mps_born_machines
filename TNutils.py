@@ -1087,6 +1087,28 @@ def sequential_update_torched(torch_mps,torch_imgs,torch_cache,site,going_right,
     del tens_cache,tens_imgs,tens_mps,tensors,new_cache
     torch.cuda.empty_cache()
 
+def torchized_cache(torch_mps,torch_imgs,inds_dict):
+    '''
+    Initializes the torchized cache. Updates the indeces dictionary.
+    '''
+    size = torch_imgs[0].shape[0]
+    pixels = len(torch_mps)
+    torch_cache = np.empty(shape = (1,2,pixels),dtype = torch.Tensor)
+    nully = qtn.Tensor()
+    inds = nully.inds
+    tons = np.array(size*[nully])
+    tans = torch.from_numpy(into_data(tons))
+    if torch.cuda.is_available():
+        tans = tans.to('cuda')
+    torch_cache[0,0,0] = tans
+    torch_cache[0,1,-1] = tans
+    inds_dict['left'][0] = inds
+    inds_dict['right'][-1] = inds
+    for site in range(pixels-2,-1,-1):
+        sequential_update_torched(torch_mps,torch_imgs,torch_cache,site,False,inds_dict)
+    del tans
+    return torch_cache
+
 #   _____
 #  |___ /
 #    |_ \
