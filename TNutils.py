@@ -1239,6 +1239,98 @@ def learning_step_torched(
     # SD.tensors[1] -> I_{index+1}
     return SD
 
+def learning_epoch_torched(
+    mps,
+    imgs,
+    torch_mps,
+    torch_imgs,
+    epochs,
+    initial_lr,
+    torch_cache,
+    inds_dict,
+    batch_size = 25,
+    update_wrap = lambda site, div: div,
+    lr_update = lambda lr: lr,
+    **kwargs):
+    '''
+    Manages the sliding left and right.
+    From tensor 1 (the second), apply learning_step() sliding to the right
+    At tensor max-2, apply learning_step() sliding to the left back to tensor 1
+    '''
+    # We expect, however, that the batch size is smaler than the input set
+    batch_size = min(len(imgs),batch_size)
+    guide = np.arange(len(imgs))
+    # Execute the epochs
+    cost = []
+    lr = copy.copy(initial_lr)
+    for epoch in range(epochs):
+        print(f'epoch {epoch+1}/{epochs}')
+        # [0,1,2,...,780,781,782,782,781,780,...,2,1,0]
+        progress = tq.tqdm([i for i in range(0,len(mps.tensors)-1)] + [i for i in range(len(mps.tensors)-2,-1,-1)], leave=True)
+
+        going_right = True
+        for index in progress:
+            np.random.shuffle(guide)
+            mask = guide[:batch_size]
+            A = learning_step_torched(
+                torch_mps,
+                index,
+                torch_imgs,
+                lr,
+                torch_cache,
+                inds_dict,
+                mask,
+                going_right,
+                update_wrap,
+                **kwargs)
+            if index == 0:
+                mps.tensors[index].modify(data=np.transpose(A.tensors[0].data,(1,0)))
+                mps.tensors[index+1].modify(data=A.tensors[1].data)
+            else:
+                mps.tensors[index].modify(data=np.transpose(A.tensors[0].data,(0,2,1)))
+                mps.tensors[index+1].modify(data=A.tensors[1].data)
+
+            # update the torched mps
+            tens = torch.from_numpy(np.array(mps[index].data,dtype = np.float32))
+            if torch.cuda.is_available():
+                tens = tens.to('cuda')
+            torch_mps[index] = tens
+            # Update also the reference dictionary
+            inds_dict['mps'][index] = mps[index].inds
+            tens = torch.from_numpy(np.array(mps[index+1].data,dtype = np.float32))
+            if torch.cuda.is_available():
+                tens = tens.to('cuda')
+            torch_mps[index+1] = tens
+            inds_dict['mps'][index+1] = mps[index+1].inds
+
+            # Update the cache for all images (for all? really?)
+            sequential_update_torched(torch_mps,torch_imgs,torch_cache,index,going_right,inds_dict)
+            # Place stuff where it belongs:
+            #if going_right and index < len(torch_mps) - 2:
+            #    torch_mps[index] = torch_mps[index].to('cpu')
+            #    torch_mps[index+2] = torch_mps[index+2].to('cuda')
+            #    # Current index goes to cpu
+            #    # index + 1 stays
+            #    # index + 2 is placed in gpu
+            #if not going_right and index > 0:
+            #    torch_mps[index+1] = torch_mps[index+1].to('cpu')
+            #    torch_mps[index-1] = torch_mps[index-1].to('cuda')
+            #    # index + 1 goes to cpu
+            #    # index stays
+            #    # index - 1 is placed in gpu
+            #p0 = computepsi(mps,imgs[0])**2
+            progress.set_description('Left Index: {}'.format(index))
+
+            if index == len(mps.tensors)-2:
+                going_right = False
+            torch.cuda.empty_cache()
+        #nll = computeNLL(mps,imgs,0)#computeNLL_cached(mps, _imgs, img_cache,0)
+        lr = lr_update(lr)
+        #print('NLL: {} | Baseline: {}'.format(nll, np.log(len(imgs)) ) )
+        #cost.append(nll)
+    # cha cha real smooth
+    return cost, lr
+
 def learning_step(mps, index, imgs, lr, going_right = True, **kwargs):
     '''
     Compute the updated merged tensor A_{index,index+1}
