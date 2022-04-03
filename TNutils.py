@@ -971,12 +971,365 @@ def compress2(mps, max_bond):
             
     return mps
 
-#   _____  
-#  |___ /  
-#    |_ \  
-#   ___) | 
+def torchized_mps(mps,inds_dict):
+    '''
+    Expects a quimb tensor network and a dictionary to place the indeces.
+    Returns an array with torch tensors for each of the mps sites.
+    '''
+    torch_mps = np.empty(len(mps.tensors),dtype = torch.Tensor)
+    for site, tens in enumerate(mps.tensors):
+        inds = tens.inds
+        _tens = torch.from_numpy(np.array(tens.data,dtype = np.float32))
+        inds_dict['mps'][site] = inds
+        if torch.cuda.is_available():
+            _tens = _tens.to('cuda')
+        torch_mps[site] = _tens
+        del _tens
+    return torch_mps
+
+def torchized_imgs(_imgs,inds_dict):
+    '''
+    Expects an array of quimb tensorized qubits.
+    Turns it into an array of torch tensors.
+    Theres one torch tensor per site,
+    of length equal to the number of images.
+    '''
+    torch_imgs = np.empty(_imgs.shape[1],dtype = torch.Tensor)
+    for site in range(_imgs.shape[1]):
+        inds = _imgs[:,site][0].inds
+        tens = torch.from_numpy(into_data(_imgs[:,site]))
+        inds_dict['imgs'][site] = (inds)
+        if torch.cuda.is_available():
+            tens = tens.to('cuda')
+        torch_imgs[site] = tens
+        del tens
+    return torch_imgs
+
+def torch_contract(inds_in,*tensors):
+    '''
+    Takes arrays of tensors and contracts them given the indeces.
+    Indeces are expected as a tuple of tuples.
+    Each of the inner tuples describes the indeces that correspond to the tensor.
+    ((i0,v1,i1),(i1,v2,i2))->(i0,v1,v2,i2)
+    [A[:, :, :],B[:, :, :]]->C[:, :, :, :]
+    '''
+    # Output indeces
+    inds_out = tuple(qtn.tensor_core._gen_output_inds(cytoolz.concat(inds_in)))
+    # Convert into einsum expression
+    eq = _inds_to_eq(inds_in, inds_out)
+    # Extract the shapes
+    shapes = [tens.shape for tens in tensors]
+    # prepare opteinsum reduction expression
+    expr = oe.contract_expression(eq,*shapes)
+    # execute and extract
+    data_arr = expr(*tensors,backend = 'torch')
+    return data_arr,inds_out
+
+def torch_multicontract(inds_in,*tensor_lists):
+    '''
+    Takes arrays of tensors and contracts them element by element.
+    '''
+    # Output indeces
+    inds_out = tuple(qtn.tensor_core._gen_output_inds(cytoolz.concat(inds_in)))
+    # Convert into einsum expression with extra index for entries
+    eq = arr_inds_to_eq(inds_in, inds_out)
+    # Extract the shapes
+    shapes = [tens.shape for tens in tensor_lists]
+    # prepare opteinsum reduction expression
+    expr = oe.contract_expression(eq,*shapes)
+    # execute and extract
+    data_arr = expr(*tensor_lists,backend = 'torch')
+    return data_arr,inds_out
+
+def sequential_update_torched(torch_mps,torch_imgs,torch_cache,site,going_right,inds_dict):
+    '''
+    Updates the cache for the given site and direction.
+    Can also be used to initialize cache.
+    '''
+    # TODO: exploit binary states
+    # TODO: adapt to masked version for lighter usage
+
+    # Direction-informed update arguments
+    current = site + 1*(not going_right)
+    target = site + 1*going_right
+    side = 'left'*going_right+'right'*(not going_right)
+    l = int(not going_right)
+
+    size = torch_imgs[current].shape[0]
+
+    tens_cache = torch_cache[0,l,current]
+    tens_imgs = torch_imgs[current]
+
+    # Broadcast mps for multicontraction. Usually way more efficient,
+    # though memory heavy.
+    tens_mps = torch.unsqueeze(torch_mps[current],0)[size*[0]]
+
+    # Extract info on the current position to update the next.
+    imgs_l_inds = inds_dict['imgs'][current]
+    mps_l_inds = inds_dict['mps'][current]
+    cache_inds = inds_dict[side][current]
+    inds_in = [mps_l_inds,imgs_l_inds]
+    tensors = [tens_mps,tens_imgs]
+    tensors = [tens_cache] + tensors
+    inds_in = [cache_inds] + inds_in
+
+    # Perform multicontraction
+    data, inds_out = torch_multicontract(tuple(inds_in),*tensors)
+
+    # Rescaling because of overflows
+    new_cache = data/torch.max(data,dim=1,keepdim = True)[0]
+
+    # Try to place in the GPU
+    if torch.cuda.is_available():
+      new_cache = new_cache.to('cuda')
+    inds_dict[side][target] = inds_out
+    torch_cache[0,l,target] = new_cache
+    del tens_cache,tens_imgs,tens_mps,tensors,new_cache
+    torch.cuda.empty_cache()
+
+def torchized_cache(torch_mps,torch_imgs,inds_dict):
+    '''
+    Initializes the torchized cache. Updates the indeces dictionary.
+    '''
+    size = torch_imgs[0].shape[0]
+    pixels = len(torch_mps)
+    torch_cache = np.empty(shape = (1,2,pixels),dtype = torch.Tensor)
+    nully = qtn.Tensor()
+    inds = nully.inds
+    tons = np.array(size*[nully])
+    tans = torch.from_numpy(into_data(tons))
+    if torch.cuda.is_available():
+        tans = tans.to('cuda')
+    torch_cache[0,0,0] = tans
+    torch_cache[0,1,-1] = tans
+    inds_dict['left'][0] = inds
+    inds_dict['right'][-1] = inds
+    for site in range(pixels-2,-1,-1):
+        sequential_update_torched(torch_mps,torch_imgs,torch_cache,site,False,inds_dict)
+    del tans
+    return torch_cache
+
+def arr_psi_primed_torched(torch_imgs,torch_cache,index,mask,inds_dict):
+    '''
+    Computes the derivative of psi up to a constant for a mask-sliced collection of images.
+    '''
+    # Extract the cache and free legs
+    left_cache = torch_cache[0,0,index][mask]
+    right_cache = torch_cache[0,1,index+1][mask]
+    left_imgs = torch_imgs[index][mask]
+    right_imgs = torch_imgs[index+1][mask]
+
+    # Extract the corresponding indeces
+    left_inds = inds_dict['left'][index]
+    right_inds = inds_dict['right'][index+1]
+    img_l_inds = inds_dict['imgs'][index]
+    img_r_inds = inds_dict['imgs'][index+1]
+
+    # Place together, they're friends
+    inds_in = [img_l_inds,img_r_inds]
+    tensors = [left_imgs,right_imgs]
+
+    # These don't always get along with the others...
+    if index != 0:
+        inds_in = [left_inds] + inds_in
+        tensors = [left_cache] + tensors
+    if index != len(torch_imgs)- 2:
+        inds_in = inds_in + [right_inds]
+        tensors = tensors + [right_cache]
+
+    # Contract in parallel
+    psi_primed_arr, inds_out = torch_multicontract(tuple(inds_in),*tensors)
+    del left_cache,right_cache,left_imgs,right_imgs,tensors
+    torch.cuda.empty_cache()
+    return psi_primed_arr, inds_out
+
+#   _____
+#  |___ /
+#    |_ \
+#   ___) |
 #  |____(_) LEARNING FUNCTIONS
-#######################################################        
+#######################################################
+
+def learning_step_torched(
+    torch_mps,
+    index,
+    torch_imgs,
+    lr,
+    torch_cache,
+    inds_dict,
+    mask,
+    going_right = True,
+    update_wrap = lambda site,div: div,
+    **kwargs):
+    '''
+    Compute the updated merged tensor A_{index,index+1}
+
+      UPDATE RULE:  A_{i,i+1} += lr* 2 *( A_{i,i+1}/Z - ( SUM_{i=1}^{m} psi'(v)/psi(v) )/m )
+    '''
+
+    # Merge I_k and I_{k+1} in a single rank 4 tensor ('i_{k-1}', 'v_k', 'i_{k+1}', 'v_{k+1}')
+    #A = qtn.tensor_contract(mps[index],mps[index+1])
+    #Z = qtn.tensor_contract(A,A)
+    inds_in = [inds_dict['mps'][index],inds_dict['mps'][index+1]]
+    _A, inds_out = torch_contract(tuple(inds_in),torch_mps[index],torch_mps[index+1])
+    _Z,_ = torch_contract((inds_out,inds_out),_A,_A)
+    A = qtn.Tensor(data = _A.cpu().detach().numpy(),inds = inds_out)
+
+    # Compute the derivative of PSI
+    _psi_primed_arr, _inds_out = arr_psi_primed_torched(torch_imgs,torch_cache,index,mask,inds_dict)
+
+    # TODO: Implement submasked version
+    _inds_in = [inds_out,_inds_out]
+    langsam = torch.unsqueeze(_A,0)[len(mask)*[0]]
+    _psi, _ = torch_multicontract(tuple(_inds_in),
+                                  langsam,
+                                  _psi_primed_arr)
+
+    # Setting the appropriate shape for an element wise quotient
+    new_shape = [len(mask),1,1,1]
+    if index not in [0,len(torch_mps)-2]:
+        new_shape.append(1)
+    _psifrac = _psi_primed_arr/torch.reshape(_psi,tuple(new_shape))
+
+    # We want the average
+    _psifrac = torch.sum(_psifrac, dim = 0)/len(mask)
+
+    # dNLL = 2A/Z - \frac{2}{|\mathcal{T}|}\sum{\psi'(v)/\psi}
+    _dNLL = _A/_Z
+    _dNLL = _dNLL.permute(tuple(np.argsort(inds_out))) - _psifrac.permute(tuple(np.argsort(_inds_out)))
+    inds_out = tuple(np.sort(inds_out))
+
+    # Go back to quimb for SVD computation on numba
+    dNLL = qtn.Tensor(data = _dNLL.cpu().detach().numpy(),inds = inds_out)
+
+    # Release the GPU
+    del _dNLL,_psifrac,_psi,_A,_psi_primed_arr,langsam
+    torch.cuda.empty_cache()
+
+    # Perform descent
+    A = A - _pd.get(lr,'curr_lr',lr)*update_wrap(index, dNLL) # Update A_{i,i+1}
+
+    # Scale
+    A = A/A.data.max()
+
+    # Now the tensor A_{i,i+1} must be split in I_k and I_{k+1}.
+    # To preserve canonicalization:
+    # > if we are merging sliding towards the RIGHT we need to absorb right
+    #                                           S  v  D
+    #     ->-->--A_{k,k+1}--<--<-   =>   ->-->-->--x--<--<--<-   =>    >-->-->--o--<--<-
+    #      |  |    |   |    |  |          |  |  |   |    |  |          |  |  |  |  |  |
+    #
+    # > if we are merging sliding toward the LEFT we need to absorb left
+    #
+    if going_right:
+        # FYI: split method does apply SVD by default
+        # there are variations of svd that can be inspected
+        # for a performance boost
+        if index == 0:
+            SD = A.split(['v'+str(index)], absorb='right', **kwargs)
+        else:
+            SD = A.split(['i'+str(index-1),'v'+str(index)], absorb='right',**kwargs)
+    else:
+        if index == 0:
+            SD = A.split(['v'+str(index)], absorb='left', **kwargs)
+        else:
+            SD = A.split(['i'+str(index-1),'v'+str(index)], absorb='left',**kwargs)
+
+    # SD.tensors[0] -> I_{index}
+    # SD.tensors[1] -> I_{index+1}
+    return SD
+
+def learning_epoch_torched(
+    mps,
+    imgs,
+    torch_mps,
+    torch_imgs,
+    epochs,
+    initial_lr,
+    torch_cache,
+    inds_dict,
+    batch_size = 25,
+    update_wrap = lambda site, div: div,
+    lr_update = lambda lr: lr,
+    **kwargs):
+    '''
+    Manages the sliding left and right.
+    From tensor 1 (the second), apply learning_step() sliding to the right
+    At tensor max-2, apply learning_step() sliding to the left back to tensor 1
+    '''
+    # We expect, however, that the batch size is smaler than the input set
+    batch_size = min(len(imgs),batch_size)
+    guide = np.arange(len(imgs))
+    # Execute the epochs
+    cost = []
+    lr = copy.copy(initial_lr)
+    for epoch in range(epochs):
+        print(f'epoch {epoch+1}/{epochs}')
+        # [0,1,2,...,780,781,782,782,781,780,...,2,1,0]
+        progress = tq.tqdm([i for i in range(0,len(mps.tensors)-1)] + [i for i in range(len(mps.tensors)-2,-1,-1)], leave=True)
+
+        going_right = True
+        for index in progress:
+            np.random.shuffle(guide)
+            mask = guide[:batch_size]
+            A = learning_step_torched(
+                torch_mps,
+                index,
+                torch_imgs,
+                lr,
+                torch_cache,
+                inds_dict,
+                mask,
+                going_right,
+                update_wrap,
+                **kwargs)
+            if index == 0:
+                mps.tensors[index].modify(data=np.transpose(A.tensors[0].data,(1,0)))
+                mps.tensors[index+1].modify(data=A.tensors[1].data)
+            else:
+                mps.tensors[index].modify(data=np.transpose(A.tensors[0].data,(0,2,1)))
+                mps.tensors[index+1].modify(data=A.tensors[1].data)
+
+            # update the torched mps
+            tens = torch.from_numpy(np.array(mps[index].data,dtype = np.float32))
+            if torch.cuda.is_available():
+                tens = tens.to('cuda')
+            torch_mps[index] = tens
+            # Update also the reference dictionary
+            inds_dict['mps'][index] = mps[index].inds
+            tens = torch.from_numpy(np.array(mps[index+1].data,dtype = np.float32))
+            if torch.cuda.is_available():
+                tens = tens.to('cuda')
+            torch_mps[index+1] = tens
+            inds_dict['mps'][index+1] = mps[index+1].inds
+
+            # Update the cache for all images (for all? really?)
+            sequential_update_torched(torch_mps,torch_imgs,torch_cache,index,going_right,inds_dict)
+            # Place stuff where it belongs:
+            #if going_right and index < len(torch_mps) - 2:
+            #    torch_mps[index] = torch_mps[index].to('cpu')
+            #    torch_mps[index+2] = torch_mps[index+2].to('cuda')
+            #    # Current index goes to cpu
+            #    # index + 1 stays
+            #    # index + 2 is placed in gpu
+            #if not going_right and index > 0:
+            #    torch_mps[index+1] = torch_mps[index+1].to('cpu')
+            #    torch_mps[index-1] = torch_mps[index-1].to('cuda')
+            #    # index + 1 goes to cpu
+            #    # index stays
+            #    # index - 1 is placed in gpu
+            #p0 = computepsi(mps,imgs[0])**2
+            progress.set_description('Left Index: {}'.format(index))
+
+            if index == len(mps.tensors)-2:
+                going_right = False
+            torch.cuda.empty_cache()
+        #nll = computeNLL(mps,imgs,0)#computeNLL_cached(mps, _imgs, img_cache,0)
+        lr = lr_update(lr)
+        #print('NLL: {} | Baseline: {}'.format(nll, np.log(len(imgs)) ) )
+        #cost.append(nll)
+    # cha cha real smooth
+    return cost, lr
 
 def learning_step(mps, index, imgs, lr, going_right = True, **kwargs):
     '''
