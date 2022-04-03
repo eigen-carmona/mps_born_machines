@@ -987,6 +987,24 @@ def torchized_mps(mps,inds_dict):
         del _tens
     return torch_mps
 
+def torchized_imgs(_imgs,inds_dict):
+    '''
+    Expects an array of quimb tensorized qubits.
+    Turns it into an array of torch tensors.
+    Theres one torch tensor per site,
+    of length equal to the number of images.
+    '''
+    torch_imgs = np.empty(_imgs.shape[1],dtype = torch.Tensor)
+    for site in range(_imgs.shape[1]):
+        inds = _imgs[:,site][0].inds
+        tens = torch.from_numpy(into_data(_imgs[:,site]))
+        inds_dict['imgs'][site] = (inds)
+        if torch.cuda.is_available():
+            tens = tens.to('cuda')
+        torch_imgs[site] = tens
+        del tens
+    return torch_imgs
+
 #   _____  
 #  |___ /  
 #    |_ \  
