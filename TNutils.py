@@ -971,6 +971,22 @@ def compress2(mps, max_bond):
             
     return mps
 
+def torchized_mps(mps,inds_dict):
+    '''
+    Expects a quimb tensor network and a dictionary to place the indeces.
+    Returns an array with torch tensors for each of the mps sites.
+    '''
+    torch_mps = np.empty(len(mps.tensors),dtype = torch.Tensor)
+    for site, tens in enumerate(mps.tensors):
+        inds = tens.inds
+        _tens = torch.from_numpy(np.array(tens.data,dtype = np.float32))
+        inds_dict['mps'][site] = inds
+        if torch.cuda.is_available():
+            _tens = _tens.to('cuda')
+        torch_mps[site] = _tens
+        del _tens
+    return torch_mps
+
 #   _____  
 #  |___ /  
 #    |_ \  
