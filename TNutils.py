@@ -1005,13 +1005,32 @@ def torchized_imgs(_imgs,inds_dict):
         del tens
     return torch_imgs
 
-#   _____  
-#  |___ /  
-#    |_ \  
-#   ___) | 
-#  |____(_) LEARNING FUNCTIONS
-#######################################################        
+def torch_contract(inds_in,*tensors):
+    '''
+    Takes arrays of tensors and contracts them given the indeces.
+    Indeces are expected as a tuple of tuples.
+    Each of the inner tuples describes the indeces that correspond to the tensor.
+    ((i0,v1,i1),(i1,v2,i2))->(i0,v1,v2,i2)
+    [A[:, :, :],B[:, :, :]]->C[:, :, :, :]
+    '''
+    # Output indeces
+    inds_out = tuple(qtn.tensor_core._gen_output_inds(cytoolz.concat(inds_in)))
+    # Convert into einsum expression
+    eq = _inds_to_eq(inds_in, inds_out)
+    # Extract the shapes
+    shapes = [tens.shape for tens in tensors]
+    # prepare opteinsum reduction expression
+    expr = oe.contract_expression(eq,*shapes)
+    # execute and extract
+    data_arr = expr(*tensors,backend = 'torch')
+    return data_arr,inds_out
 
+#   _____
+#  |___ /
+#    |_ \
+#   ___) |
+#  |____(_) LEARNING FUNCTIONS
+#######################################################
 def learning_step(mps, index, imgs, lr, going_right = True, **kwargs):
     '''
     Compute the updated merged tensor A_{index,index+1}
