@@ -1041,6 +1041,52 @@ def torch_multicontract(inds_in,*tensor_lists):
     data_arr = expr(*tensor_lists,backend = 'torch')
     return data_arr,inds_out
 
+def sequential_update_torched(torch_mps,torch_imgs,torch_cache,site,going_right,inds_dict):
+    '''
+    Updates the cache for the given site and direction.
+    Can also be used to initialize cache.
+    '''
+    # TODO: exploit binary states
+    # TODO: adapt to masked version for lighter usage
+
+    # Direction-informed update arguments
+    current = site + 1*(not going_right)
+    target = site + 1*going_right
+    side = 'left'*going_right+'right'*(not going_right)
+    l = int(not going_right)
+
+    size = torch_imgs[current].shape[0]
+
+    tens_cache = torch_cache[0,l,current]
+    tens_imgs = torch_imgs[current]
+
+    # Broadcast mps for multicontraction. Usually way more efficient,
+    # though memory heavy.
+    tens_mps = torch.unsqueeze(torch_mps[current],0)[size*[0]]
+
+    # Extract info on the current position to update the next.
+    imgs_l_inds = inds_dict['imgs'][current]
+    mps_l_inds = inds_dict['mps'][current]
+    cache_inds = inds_dict[side][current]
+    inds_in = [mps_l_inds,imgs_l_inds]
+    tensors = [tens_mps,tens_imgs]
+    tensors = [tens_cache] + tensors
+    inds_in = [cache_inds] + inds_in
+
+    # Perform multicontraction
+    data, inds_out = torch_multicontract(tuple(inds_in),*tensors)
+
+    # Rescaling because of overflows
+    new_cache = data/torch.max(data,dim=1,keepdim = True)[0]
+
+    # Try to place in the GPU
+    if torch.cuda.is_available():
+      new_cache = new_cache.to('cuda')
+    inds_dict[side][target] = inds_out
+    torch_cache[0,l,target] = new_cache
+    del tens_cache,tens_imgs,tens_mps,tensors,new_cache
+    torch.cuda.empty_cache()
+
 #   _____
 #  |___ /
 #    |_ \
