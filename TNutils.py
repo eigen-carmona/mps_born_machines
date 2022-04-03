@@ -1109,6 +1109,40 @@ def torchized_cache(torch_mps,torch_imgs,inds_dict):
     del tans
     return torch_cache
 
+def arr_psi_primed_torched(torch_imgs,torch_cache,index,mask,inds_dict):
+    '''
+    Computes the derivative of psi up to a constant for a mask-sliced collection of images.
+    '''
+    # Extract the cache and free legs
+    left_cache = torch_cache[0,0,index][mask]
+    right_cache = torch_cache[0,1,index+1][mask]
+    left_imgs = torch_imgs[index][mask]
+    right_imgs = torch_imgs[index+1][mask]
+
+    # Extract the corresponding indeces
+    left_inds = inds_dict['left'][index]
+    right_inds = inds_dict['right'][index+1]
+    img_l_inds = inds_dict['imgs'][index]
+    img_r_inds = inds_dict['imgs'][index+1]
+
+    # Place together, they're friends
+    inds_in = [img_l_inds,img_r_inds]
+    tensors = [left_imgs,right_imgs]
+
+    # These don't always get along with the others...
+    if index != 0:
+        inds_in = [left_inds] + inds_in
+        tensors = [left_cache] + tensors
+    if index != len(torch_imgs)- 2:
+        inds_in = inds_in + [right_inds]
+        tensors = tensors + [right_cache]
+
+    # Contract in parallel
+    psi_primed_arr, inds_out = torch_multicontract(tuple(inds_in),*tensors)
+    del left_cache,right_cache,left_imgs,right_imgs,tensors
+    torch.cuda.empty_cache()
+    return psi_primed_arr, inds_out
+
 #   _____
 #  |___ /
 #    |_ \
