@@ -1025,6 +1025,22 @@ def torch_contract(inds_in,*tensors):
     data_arr = expr(*tensors,backend = 'torch')
     return data_arr,inds_out
 
+def torch_multicontract(inds_in,*tensor_lists):
+    '''
+    Takes arrays of tensors and contracts them element by element.
+    '''
+    # Output indeces
+    inds_out = tuple(qtn.tensor_core._gen_output_inds(cytoolz.concat(inds_in)))
+    # Convert into einsum expression with extra index for entries
+    eq = arr_inds_to_eq(inds_in, inds_out)
+    # Extract the shapes
+    shapes = [tens.shape for tens in tensor_lists]
+    # prepare opteinsum reduction expression
+    expr = oe.contract_expression(eq,*shapes)
+    # execute and extract
+    data_arr = expr(*tensor_lists,backend = 'torch')
+    return data_arr,inds_out
+
 #   _____
 #  |___ /
 #    |_ \
