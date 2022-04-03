@@ -1149,6 +1149,96 @@ def arr_psi_primed_torched(torch_imgs,torch_cache,index,mask,inds_dict):
 #   ___) |
 #  |____(_) LEARNING FUNCTIONS
 #######################################################
+
+def learning_step_torched(
+    torch_mps,
+    index,
+    torch_imgs,
+    lr,
+    torch_cache,
+    inds_dict,
+    mask,
+    going_right = True,
+    update_wrap = lambda site,div: div,
+    **kwargs):
+    '''
+    Compute the updated merged tensor A_{index,index+1}
+
+      UPDATE RULE:  A_{i,i+1} += lr* 2 *( A_{i,i+1}/Z - ( SUM_{i=1}^{m} psi'(v)/psi(v) )/m )
+    '''
+
+    # Merge I_k and I_{k+1} in a single rank 4 tensor ('i_{k-1}', 'v_k', 'i_{k+1}', 'v_{k+1}')
+    #A = qtn.tensor_contract(mps[index],mps[index+1])
+    #Z = qtn.tensor_contract(A,A)
+    inds_in = [inds_dict['mps'][index],inds_dict['mps'][index+1]]
+    _A, inds_out = torch_contract(tuple(inds_in),torch_mps[index],torch_mps[index+1])
+    _Z,_ = torch_contract((inds_out,inds_out),_A,_A)
+    A = qtn.Tensor(data = _A.cpu().detach().numpy(),inds = inds_out)
+
+    # Compute the derivative of PSI
+    _psi_primed_arr, _inds_out = arr_psi_primed_torched(torch_imgs,torch_cache,index,mask,inds_dict)
+
+    # TODO: Implement submasked version
+    _inds_in = [inds_out,_inds_out]
+    langsam = torch.unsqueeze(_A,0)[len(mask)*[0]]
+    _psi, _ = torch_multicontract(tuple(_inds_in),
+                                  langsam,
+                                  _psi_primed_arr)
+
+    # Setting the appropriate shape for an element wise quotient
+    new_shape = [len(mask),1,1,1]
+    if index not in [0,len(torch_mps)-2]:
+        new_shape.append(1)
+    _psifrac = _psi_primed_arr/torch.reshape(_psi,tuple(new_shape))
+
+    # We want the average
+    _psifrac = torch.sum(_psifrac, dim = 0)/len(mask)
+
+    # dNLL = 2A/Z - \frac{2}{|\mathcal{T}|}\sum{\psi'(v)/\psi}
+    _dNLL = _A/_Z
+    _dNLL = _dNLL.permute(tuple(np.argsort(inds_out))) - _psifrac.permute(tuple(np.argsort(_inds_out)))
+    inds_out = tuple(np.sort(inds_out))
+
+    # Go back to quimb for SVD computation on numba
+    dNLL = qtn.Tensor(data = _dNLL.cpu().detach().numpy(),inds = inds_out)
+
+    # Release the GPU
+    del _dNLL,_psifrac,_psi,_A,_psi_primed_arr,langsam
+    torch.cuda.empty_cache()
+
+    # Perform descent
+    A = A - _pd.get(lr,'curr_lr',lr)*update_wrap(index, dNLL) # Update A_{i,i+1}
+
+    # Scale
+    A = A/A.data.max()
+
+    # Now the tensor A_{i,i+1} must be split in I_k and I_{k+1}.
+    # To preserve canonicalization:
+    # > if we are merging sliding towards the RIGHT we need to absorb right
+    #                                           S  v  D
+    #     ->-->--A_{k,k+1}--<--<-   =>   ->-->-->--x--<--<--<-   =>    >-->-->--o--<--<-
+    #      |  |    |   |    |  |          |  |  |   |    |  |          |  |  |  |  |  |
+    #
+    # > if we are merging sliding toward the LEFT we need to absorb left
+    #
+    if going_right:
+        # FYI: split method does apply SVD by default
+        # there are variations of svd that can be inspected
+        # for a performance boost
+        if index == 0:
+            SD = A.split(['v'+str(index)], absorb='right', **kwargs)
+        else:
+            SD = A.split(['i'+str(index-1),'v'+str(index)], absorb='right',**kwargs)
+    else:
+        if index == 0:
+            SD = A.split(['v'+str(index)], absorb='left', **kwargs)
+        else:
+            SD = A.split(['i'+str(index-1),'v'+str(index)], absorb='left',**kwargs)
+
+    # SD.tensors[0] -> I_{index}
+    # SD.tensors[1] -> I_{index+1}
+    return SD
+
 def learning_step(mps, index, imgs, lr, going_right = True, **kwargs):
     '''
     Compute the updated merged tensor A_{index,index+1}
