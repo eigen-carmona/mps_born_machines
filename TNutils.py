@@ -1686,7 +1686,79 @@ def training_and_probing(
             
     return train_costs, samples
         
-    
+def training_and_probing_torched(
+    period_epochs,
+    periods,
+    mps,
+    inds_dict,
+    torch_mps,
+    shape,
+    imgs,
+    _imgs,
+    torch_imgs,
+    torch_cache,
+    batch_size,
+    lr,
+    update_wrap = lambda site, div: div,
+    lr_update = lambda lr: lr,
+    val_imgs = [],
+    period_samples = 0,
+    corrupted_set = None,
+    plot = False,
+    path = './',
+    **kwargs):
+    # Initialize the training costs
+    train_costs = [computeNLL(mps, imgs,0)]
+    #train_costs = []
+
+    # TODO: adapt computeNLL to tneinsum3
+    val_costs = []
+    if len(val_imgs)>0:
+        # Initialize the validation costs
+        val_costs.append(computeNLL(mps, val_imgs, 0))
+
+
+    samples = []
+
+    # begin the iteration
+    for period in range(periods):
+        _,lr = learning_epoch_torched(mps,
+                                    imgs,
+                                    torch_mps,
+                                    torch_imgs,
+                                    period_epochs,
+                                    lr,
+                                    torch_cache,
+                                    inds_dict,
+                                    batch_size = batch_size,
+                                    update_wrap = update_wrap,
+                                    lr_update = lr_update,
+                                    **kwargs
+                                    )
+
+        costs = computeNLL(mps,imgs,0)
+        train_costs.extend([costs])
+
+        if len(val_imgs)>0:
+            val_costs.append(computeNLL(mps, val_imgs, 0))
+
+        # Save MPS
+        model_dir = mps_checkpoint(mps, imgs, val_imgs, period, periods, train_costs, val_costs, path = path)
+
+        # Plot and Save Loss curve
+        if plot:
+            plot_nll(train_costs,np.log(len(_imgs)),val_costs, period_epochs, path = model_dir)
+            plt.show()
+
+        # Save Generated Images SVG and NPY
+        if period_samples > 0:
+            samples.append(generate_and_save(mps, period_samples, period, periods, period_epochs, imgs, shape,path = model_dir))
+
+    # Finally, plot the bdims
+    bdims_imshow(mps, shape, savefig=model_dir+'/gen_imgs/'+'right_bdim.svg')
+
+    return train_costs, samples
+
 #   _  _    
 #  | || |   
 #  | || |_  
