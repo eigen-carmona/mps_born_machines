@@ -2196,7 +2196,7 @@ def generate_and_save(mps, period_samples, period, periods, period_epochs, imgs,
     
     return gen_imgs
 
-def plot_nll(nlls,baseline,mps,imgs,val_nlls,period_epochs = 1):
+def plot_nll(nlls,baseline,val_nlls,period_epochs = 1, path = './'):
     plt.plot(range(len(nlls)),nlls, label='training set')
     plt.title('Negative log-likelihood')
     plt.axhline(baseline,color = 'r', linestyle= 'dashed', label='baseline')
@@ -2208,7 +2208,8 @@ def plot_nll(nlls,baseline,mps,imgs,val_nlls,period_epochs = 1):
     plt.xticks(range(0,len(nlls),step)) # Ticks only show integers (epochs)
     plt.xlabel('epochs')
     plt.ylabel(r'$\mathcal{L}$')
-    if not os.path.exists('./'+'T'+str(len(imgs))+'_L'+str(len(mps.tensors))):
-            os.mkdir('./'+'T'+str(len(imgs))+'_L'+str(len(mps.tensors)))
-    plt.savefig('./'+'T'+str(len(imgs))+'_L'+str(len(mps.tensors))+'/loss', format='svg')
-    
+    plt.grid()
+    if not os.path.exists(path):
+            os.mkdir(path)
+    plt.savefig(path+'/loss.svg', format='svg')
+
