@@ -2164,14 +2164,14 @@ def mps_checkpoint(mps, imgs, val_imgs, period, periods, train_cost, val_cost, p
     # Where are we placing stuff now?
     return path + foldname + '/'
 
-def generate_and_save(mps, period_samples, period, periods, period_epochs, imgs, shape):
+def generate_and_save(mps, period_samples, period, periods, period_epochs, imgs, shape, path = './'):
     # If images are more than one, we display using subplots
     if period_samples > 1:
         # Generate images
         gen_imgs = generate_samples(mps,period_samples)
         # Create the subfolder for gen_imgs if it does not exists
-        if not os.path.exists('./'+'T'+str(len(imgs))+'_L'+str(len(mps.tensors))+'/gen_imgs'):
-            os.mkdir('./'+'T'+str(len(imgs))+'_L'+str(len(mps.tensors))+'/gen_imgs')
+        if not os.path.exists(path+'/gen_imgs'):
+            os.mkdir(path+'/gen_imgs')
 
         fig, ax = plt.subplots(1, period_samples, figsize=(2*period_samples,2))
         for i in range(period_samples):
@@ -2179,23 +2179,23 @@ def generate_and_save(mps, period_samples, period, periods, period_epochs, imgs,
             ax[i].set_xticks([])
             ax[i].set_yticks([])
         fig.suptitle('Generated images: {}/{}'.format(period_epochs*(period+1),period_epochs*periods))
-        plt.savefig('./'+'T'+str(len(imgs))+'_L'+str(len(mps.tensors))+'/gen_imgs/'+str(period), format='svg')
+        plt.savefig(path+'/gen_imgs/'+str(period)+'.svg', format='svg')
     
     # if period_samples == 1, we display using plot_img function    
     else:
         # Generate images
         gen_imgs = generate_sample(mps)
         # Create the subfolder for gen_imgs if it does not exists
-        if not os.path.exists('./'+'T'+str(len(imgs))+'_L'+str(len(mps.tensors))+'/gen_imgs'):
-            os.mkdir('./'+'T'+str(len(imgs))+'_L'+str(len(mps.tensors))+'/gen_imgs')
+        if not os.path.exists(path+'/gen_imgs'):
+            os.mkdir(path+'/gen_imgs')
 
         plot_img(gen_imgs, shape, border = True, 
                  title = 'Generated image: {}/{}'.format(period_epochs*(period+1),period_epochs*periods),
-                 savefig = './T'+str(len(imgs))+'_L'+str(len(mps.tensors))+'/gen_imgs/'+str(period) )
+                 savefig = path+'/gen_imgs/'+str(period)+'.svg' )
     plt.show()
     
     # Save the npy of the current generated images
-    np.save('./T'+str(len(imgs))+'_L'+str(len(mps.tensors))+'/gen_imgs/'+str(period)+'.npy', gen_imgs)
+    np.save(path +'/gen_imgs/'+str(period)+'.npy', gen_imgs)
     
     return gen_imgs
 
