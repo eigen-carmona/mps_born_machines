@@ -2137,30 +2137,33 @@ def meanpool2d(npmnist, shape, grayscale_threshold = 0.3):
     
     return ds_imgs
 
-def mps_checkpoint(mps, imgs, val_imgs, period, periods, train_cost, val_cost):
+def mps_checkpoint(mps, imgs, val_imgs, period, periods, train_cost, val_cost, path = './'):
     # Save the mps
     oldfilename = str(period-1)+'I'+str(periods-1)
     filename = str(period)+'I'+str(periods-1)
     foldname = 'T'+str(len(imgs))+'_L'+str(len(mps.tensors))
     # If folder does not exists
-    if not os.path.exists('./'+foldname):
+    if not os.path.exists(path+foldname):
         # Make the folder
-        os.makedirs('./'+foldname)
-    
-    if os.path.isfile('./'+foldname+'/'+oldfilename+'.mps'):
-        os.remove('./'+foldname+'/'+oldfilename+'.mps')
-        
-    quimb.utils.save_to_disk(mps, './'+foldname+'/'+filename+'.mps')
-    
+        os.makedirs(path+foldname)
+
+    if os.path.isfile(path+foldname+'/'+oldfilename+'.mps'):
+        os.remove(path+foldname+'/'+oldfilename+'.mps')
+
+    quimb.utils.save_to_disk(mps, path+foldname+'/'+filename+'.mps')
+
     # Save training and val loss
-    np.save('./'+foldname+'/trainloss', train_cost)
-    np.save('./'+foldname+'/valloss', val_cost)
-    
+    np.save(path+foldname+'/trainloss', train_cost)
+    np.save(path+foldname+'/valloss', val_cost)
+
     # Save img and val_img
     if period == 0:
-        np.save('./'+foldname+'/train_set.npy', imgs)
-        np.save('./'+foldname+'/val_set.npy', val_imgs)
-        
+        np.save(path+foldname+'/train_set.npy', imgs)
+        np.save(path+foldname+'/val_set.npy', val_imgs)
+
+    # Where are we placing stuff now?
+    return path + foldname + '/'
+
 def generate_and_save(mps, period_samples, period, periods, period_epochs, imgs, shape):
     # If images are more than one, we display using subplots
     if period_samples > 1:
