@@ -2045,15 +2045,25 @@ def plot_dbonds(mps, savefig=''):
     plt.show()
 
 def bdims_imshow(mps, shape, savefig=''):
+    fig, ax = plt.subplots()
     heat = np.append(np.array(mps.bond_sizes()),0).reshape(shape)
-    hm = plt.imshow(heat)
+    median = float((heat.max()-heat.min())/2)
+    hm = ax.imshow(heat)
+    ax.set_xticks([])
+    ax.set_yticks([])
+    for i in range(heat.shape[0]):
+        for j in range(heat.shape[1]):
+            value = heat[i, j]
+            color = "w"*int(value<=median)+"b"*int(value>median)
+            text = ax.text(j, i, value,
+                       ha="center", va="center", color=color,fontweight='bold')
     plt.colorbar(hm)
-    
+
     plt.title('(Right) bond dimension for every pixel')
-    
+
     if savefig != '':
         # save the picture as svg in the location determined by savefig
-        plt.savefig(savefig, format='svg')
+        fig.savefig(savefig, format='svg')
     plt.show()
         
 #  __    
