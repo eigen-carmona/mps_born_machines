@@ -1363,10 +1363,10 @@ def learning_epoch_torched(
             if index == len(mps.tensors)-2:
                 going_right = False
             torch.cuda.empty_cache()
-        #nll = computeNLL(mps,imgs,0)#computeNLL_cached(mps, _imgs, img_cache,0)
+        nll = computeNLL_torched(mps,imgs,torch_mps,torch_imgs,inds_dict)
         lr = lr_update(lr)
-        #print('NLL: {} | Baseline: {}'.format(nll, np.log(len(imgs)) ) )
-        #cost.append(nll)
+        print('NLL: {} | Baseline: {}'.format(nll, np.log(len(imgs)) ) )
+        cost.append(nll)
     # cha cha real smooth
     return cost, lr
 
@@ -1761,7 +1761,7 @@ def training_and_probing_torched(
 
     # begin the iteration
     for period in range(periods):
-        _,lr = learning_epoch_torched(mps,
+        costs,lr = learning_epoch_torched(mps,
                                     imgs,
                                     torch_mps,
                                     torch_imgs,
@@ -1774,9 +1774,7 @@ def training_and_probing_torched(
                                     lr_update = lr_update,
                                     **kwargs
                                     )
-
-        costs = computeNLL(mps,imgs,0)
-        train_costs.extend([costs])
+        train_costs.extend(costs)
 
         if len(val_imgs)>0:
             val_costs.append(computeNLL(mps, val_imgs, 0))
