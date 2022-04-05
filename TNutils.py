@@ -111,7 +111,7 @@ class mps_lr:
         else:
             J = dNLL
         
-        self.past_grad[left_index] = np.mean(dNLL.data)/dNLL.data.max()
+        self.past_grad[left_index] = np.mean(dNLL.data)
         
         return J
             
@@ -1201,13 +1201,20 @@ def learning_step_torched(
 
     # Go back to quimb for SVD computation on numba
     dNLL = qtn.Tensor(data = _dNLL.cpu().detach().numpy(),inds = inds_out)
-
+    
+    crash = False
+    if 0 in _psi:
+        crash = True
+    
     # Release the GPU
     del _dNLL,_psifrac,_psi,_A,_psi_primed_arr,langsam
     torch.cuda.empty_cache()
 
     # Perform descent
-    A = A - _pd.get(lr,'curr_lr',lr)*update_wrap(index, dNLL) # Update A_{i,i+1}
+    if not crash:
+        A = A - _pd.get(lr,'curr_lr',lr)*update_wrap(index, dNLL) # Update A_{i,i+1}
+    else:
+        print('ripperoni')
 
     # Scale
     A = A/A.data.max()
@@ -1261,7 +1268,6 @@ def learning_epoch_torched(
     batch_size = min(len(imgs),batch_size)
     guide = np.arange(len(imgs))
     # Execute the epochs
-    cost = []
     lr = copy.copy(initial_lr)
     for epoch in range(epochs):
         print(f'epoch {epoch+1}/{epochs}')
@@ -1289,7 +1295,7 @@ def learning_epoch_torched(
             else:
                 mps.tensors[index].modify(data=np.transpose(A.tensors[0].data,(0,2,1)))
                 mps.tensors[index+1].modify(data=A.tensors[1].data)
-
+                
             # update the torched mps
             tens = torch.from_numpy(np.array(mps[index].data,dtype = np.float32))
             if torch.cuda.is_available():
@@ -1329,7 +1335,7 @@ def learning_epoch_torched(
         #print('NLL: {} | Baseline: {}'.format(nll, np.log(len(imgs)) ) )
         #cost.append(nll)
     # cha cha real smooth
-    return cost, lr
+    return lr
 
 def learning_step(mps, index, imgs, lr, going_right = True, **kwargs):
     '''
