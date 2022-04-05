@@ -111,7 +111,7 @@ class mps_lr:
         else:
             J = dNLL
         
-        self.past_grad[left_index] = np.mean(dNLL.data)/dNLL.data.max()
+        self.past_grad[left_index] = np.mean(dNLL.data)
         
         return J
             
@@ -906,6 +906,27 @@ def computeNLL_cached(mps, _imgs, img_cache, index):
     #        |T| |_  /_                      _|    |T| /_
     return -(2/len(_imgs))*sum_log + np.log(Z)
 
+def computeNLL_torched(mps,imgs,torch_mps,torch_imgs,inds_dict):
+    # ! It is assumed that the the mps is right canonized
+    mps_inds = inds_dict['mps'][0]
+    inds_in = [mps_inds,mps_inds]
+    _Z,_ = torch_contract(tuple(inds_in),torch_mps[0],torch_mps[0])
+    Z = _Z.cpu().detach().numpy()
+    _inds_dict = copy.copy(inds_dict)
+    psi, _ = torchized_cache(torch_mps,torch_imgs,_inds_dict,True)
+    if 0 in psi:
+        # Sometimes the accuracy is too limited...
+        # Fallback to computeNLL
+        del Z, psi
+        print(f'Unable to compute NLL with torch variables')
+        return computeNLL(mps,imgs)
+    _psi = psi.cpu().detach().numpy()
+    sum_log = np.sum(np.log(np.abs(_psi)))
+    size = torch_imgs[0].shape[0]
+    nll = -2*sum_log/size + np.log(Z)
+    del _psi,_Z
+    return nll
+
 def compress(mps, max_bond):
     
     for index in range(len(mps.tensors)-2,-1,-1):
@@ -1041,7 +1062,7 @@ def torch_multicontract(inds_in,*tensor_lists):
     data_arr = expr(*tensor_lists,backend = 'torch')
     return data_arr,inds_out
 
-def sequential_update_torched(torch_mps,torch_imgs,torch_cache,site,going_right,inds_dict):
+def sequential_update_torched(torch_mps,torch_imgs,torch_cache,site,going_right,inds_dict, rescale = True):
     '''
     Updates the cache for the given site and direction.
     Can also be used to initialize cache.
@@ -1077,17 +1098,19 @@ def sequential_update_torched(torch_mps,torch_imgs,torch_cache,site,going_right,
     data, inds_out = torch_multicontract(tuple(inds_in),*tensors)
 
     # Rescaling because of overflows
-    new_cache = data/torch.max(data,dim=1,keepdim = True)[0]
+    if rescale:
+        data = data/torch.max(data,dim=1,keepdim = True)[0]
+    new_cache = data
 
     # Try to place in the GPU
     if torch.cuda.is_available():
       new_cache = new_cache.to('cuda')
     inds_dict[side][target] = inds_out
     torch_cache[0,l,target] = new_cache
-    del tens_cache,tens_imgs,tens_mps,tensors,new_cache
+    del tens_cache,tens_imgs,tens_mps,tensors,new_cache,data
     torch.cuda.empty_cache()
 
-def torchized_cache(torch_mps,torch_imgs,inds_dict):
+def torchized_cache(torch_mps,torch_imgs,inds_dict,computing_psi = False):
     '''
     Initializes the torchized cache. Updates the indeces dictionary.
     '''
@@ -1105,8 +1128,24 @@ def torchized_cache(torch_mps,torch_imgs,inds_dict):
     inds_dict['left'][0] = inds
     inds_dict['right'][-1] = inds
     for site in range(pixels-2,-1,-1):
-        sequential_update_torched(torch_mps,torch_imgs,torch_cache,site,False,inds_dict)
+        sequential_update_torched(
+            torch_mps,torch_imgs,torch_cache,site,False,inds_dict,
+            rescale = not computing_psi)
     del tans
+
+    # If we didn't rescale the cache, we can use it to compute psi
+    if computing_psi:
+        # We must contract the zeroth index of the right cache
+        img_inds = inds_dict['imgs'][0]
+        mps_inds = inds_dict['mps'][0]
+        cache_inds = inds_dict['right'][0]
+        inds_in = [cache_inds,mps_inds,img_inds]
+        mps_tens = torch.unsqueeze(torch_mps[0],0)[size*[0]]
+        tensors = [torch_cache[0,1,0],mps_tens,torch_imgs[0]]
+        psi, inds_out = torch_multicontract(tuple(inds_in),*tensors)
+        del tensors
+        return psi,inds_out
+
     return torch_cache
 
 def arr_psi_primed_torched(torch_imgs,torch_cache,index,mask,inds_dict):
@@ -1202,12 +1241,17 @@ def learning_step_torched(
     # Go back to quimb for SVD computation on numba
     dNLL = qtn.Tensor(data = _dNLL.cpu().detach().numpy(),inds = inds_out)
 
+    crash = 0 in _psi
+
     # Release the GPU
     del _dNLL,_psifrac,_psi,_A,_psi_primed_arr,langsam
     torch.cuda.empty_cache()
 
-    # Perform descent
-    A = A - _pd.get(lr,'curr_lr',lr)*update_wrap(index, dNLL) # Update A_{i,i+1}
+    if not crash:
+        # Perform descent
+        A = A - _pd.get(lr,'curr_lr',lr)*update_wrap(index, dNLL) # Update A_{i,i+1}
+    else:
+        print('RIPPERONI')
 
     # Scale
     A = A/A.data.max()
@@ -1324,10 +1368,10 @@ def learning_epoch_torched(
             if index == len(mps.tensors)-2:
                 going_right = False
             torch.cuda.empty_cache()
-        #nll = computeNLL(mps,imgs,0)#computeNLL_cached(mps, _imgs, img_cache,0)
+        nll = computeNLL_torched(mps,imgs,torch_mps,torch_imgs,inds_dict)
         lr = lr_update(lr)
-        #print('NLL: {} | Baseline: {}'.format(nll, np.log(len(imgs)) ) )
-        #cost.append(nll)
+        print('NLL: {} | Baseline: {}'.format(nll, np.log(len(imgs)) ) )
+        cost.append(nll)
     # cha cha real smooth
     return cost, lr
 
@@ -1686,7 +1730,77 @@ def training_and_probing(
             
     return train_costs, samples
         
-    
+def training_and_probing_torched(
+    period_epochs,
+    periods,
+    mps,
+    inds_dict,
+    torch_mps,
+    shape,
+    imgs,
+    _imgs,
+    torch_imgs,
+    torch_cache,
+    batch_size,
+    lr,
+    update_wrap = lambda site, div: div,
+    lr_update = lambda lr: lr,
+    val_imgs = [],
+    period_samples = 0,
+    corrupted_set = None,
+    plot = False,
+    path = './',
+    **kwargs):
+    # Initialize the training costs
+    train_costs = [computeNLL(mps, imgs,0)]
+    #train_costs = []
+
+    # TODO: adapt computeNLL to tneinsum3
+    val_costs = []
+    if len(val_imgs)>0:
+        # Initialize the validation costs
+        val_costs.append(computeNLL(mps, val_imgs, 0))
+
+
+    samples = []
+
+    # begin the iteration
+    for period in range(periods):
+        costs,lr = learning_epoch_torched(mps,
+                                    imgs,
+                                    torch_mps,
+                                    torch_imgs,
+                                    period_epochs,
+                                    lr,
+                                    torch_cache,
+                                    inds_dict,
+                                    batch_size = batch_size,
+                                    update_wrap = update_wrap,
+                                    lr_update = lr_update,
+                                    **kwargs
+                                    )
+        train_costs.extend(costs)
+
+        if len(val_imgs)>0:
+            val_costs.append(computeNLL(mps, val_imgs, 0))
+
+        # Save MPS
+        model_dir = mps_checkpoint(mps, imgs, val_imgs, period, periods, train_costs, val_costs, path = path)
+
+        # Plot and Save Loss curve
+        if plot:
+            plot_nll(train_costs,np.log(len(_imgs)),val_costs, period_epochs, path = model_dir)
+            plt.show()
+
+        # Save Generated Images SVG and NPY
+        if period_samples > 0:
+            samples.append(generate_and_save(mps, period_samples, period, periods, period_epochs, imgs, shape,path = model_dir))
+
+    # Finally, plot the bdims
+    bdims_imshow(mps, shape, savefig=model_dir+'/gen_imgs/'+'right_bdim.svg')
+
+    return train_costs, samples
+
 #   _  _    
 #  | || |   
 #  | || |_  
@@ -2045,15 +2159,26 @@ def plot_dbonds(mps, savefig=''):
     plt.show()
 
 def bdims_imshow(mps, shape, savefig=''):
+    fig, ax = plt.subplots()
     heat = np.append(np.array(mps.bond_sizes()),0).reshape(shape)
-    hm = plt.imshow(heat)
+    median = float((heat.max()-heat.min())/2)
+    hm = ax.imshow(heat)
+    ax.set_xticks([])
+    ax.set_yticks([])
+    if shape[0]*shape[1] <= 64:
+        for i in range(heat.shape[0]):
+            for j in range(heat.shape[1]):
+                value = heat[i, j]
+                color = "w"*int(value<=median)+"b"*int(value>median)
+                text = ax.text(j, i, value,
+                           ha="center", va="center", color=color,fontweight='bold')
     plt.colorbar(hm)
-    
+
     plt.title('(Right) bond dimension for every pixel')
-    
+
     if savefig != '':
         # save the picture as svg in the location determined by savefig
-        plt.savefig(savefig, format='svg')
+        fig.savefig(savefig, format='svg')
     plt.show()
         
 #  __    
@@ -2137,38 +2262,41 @@ def meanpool2d(npmnist, shape, grayscale_threshold = 0.3):
     
     return ds_imgs
 
-def mps_checkpoint(mps, imgs, val_imgs, period, periods, train_cost, val_cost):
+def mps_checkpoint(mps, imgs, val_imgs, period, periods, train_cost, val_cost, path = './'):
     # Save the mps
     oldfilename = str(period-1)+'I'+str(periods-1)
     filename = str(period)+'I'+str(periods-1)
     foldname = 'T'+str(len(imgs))+'_L'+str(len(mps.tensors))
     # If folder does not exists
-    if not os.path.exists('./'+foldname):
+    if not os.path.exists(path+foldname):
         # Make the folder
-        os.makedirs('./'+foldname)
-    
-    if os.path.isfile('./'+foldname+'/'+oldfilename+'.mps'):
-        os.remove('./'+foldname+'/'+oldfilename+'.mps')
-        
-    quimb.utils.save_to_disk(mps, './'+foldname+'/'+filename+'.mps')
-    
+        os.makedirs(path+foldname)
+
+    if os.path.isfile(path+foldname+'/'+oldfilename+'.mps'):
+        os.remove(path+foldname+'/'+oldfilename+'.mps')
+
+    quimb.utils.save_to_disk(mps, path+foldname+'/'+filename+'.mps')
+
     # Save training and val loss
-    np.save('./'+foldname+'/trainloss', train_cost)
-    np.save('./'+foldname+'/valloss', val_cost)
-    
+    np.save(path+foldname+'/trainloss', train_cost)
+    np.save(path+foldname+'/valloss', val_cost)
+
     # Save img and val_img
     if period == 0:
-        np.save('./'+foldname+'/train_set.npy', imgs)
-        np.save('./'+foldname+'/val_set.npy', val_imgs)
-        
-def generate_and_save(mps, period_samples, period, periods, period_epochs, imgs, shape):
+        np.save(path+foldname+'/train_set.npy', imgs)
+        np.save(path+foldname+'/val_set.npy', val_imgs)
+
+    # Where are we placing stuff now?
+    return path + foldname + '/'
+
+def generate_and_save(mps, period_samples, period, periods, period_epochs, imgs, shape, path = './'):
     # If images are more than one, we display using subplots
     if period_samples > 1:
         # Generate images
         gen_imgs = generate_samples(mps,period_samples)
         # Create the subfolder for gen_imgs if it does not exists
-        if not os.path.exists('./'+'T'+str(len(imgs))+'_L'+str(len(mps.tensors))+'/gen_imgs'):
-            os.mkdir('./'+'T'+str(len(imgs))+'_L'+str(len(mps.tensors))+'/gen_imgs')
+        if not os.path.exists(path+'/gen_imgs'):
+            os.mkdir(path+'/gen_imgs')
 
         fig, ax = plt.subplots(1, period_samples, figsize=(2*period_samples,2))
         for i in range(period_samples):
@@ -2176,27 +2304,27 @@ def generate_and_save(mps, period_samples, period, periods, period_epochs, imgs,
             ax[i].set_xticks([])
             ax[i].set_yticks([])
         fig.suptitle('Generated images: {}/{}'.format(period_epochs*(period+1),period_epochs*periods))
-        plt.savefig('./'+'T'+str(len(imgs))+'_L'+str(len(mps.tensors))+'/gen_imgs/'+str(period), format='svg')
+        plt.savefig(path+'/gen_imgs/'+str(period)+'.svg', format='svg')
     
     # if period_samples == 1, we display using plot_img function    
     else:
         # Generate images
         gen_imgs = generate_sample(mps)
         # Create the subfolder for gen_imgs if it does not exists
-        if not os.path.exists('./'+'T'+str(len(imgs))+'_L'+str(len(mps.tensors))+'/gen_imgs'):
-            os.mkdir('./'+'T'+str(len(imgs))+'_L'+str(len(mps.tensors))+'/gen_imgs')
+        if not os.path.exists(path+'/gen_imgs'):
+            os.mkdir(path+'/gen_imgs')
 
         plot_img(gen_imgs, shape, border = True, 
                  title = 'Generated image: {}/{}'.format(period_epochs*(period+1),period_epochs*periods),
-                 savefig = './T'+str(len(imgs))+'_L'+str(len(mps.tensors))+'/gen_imgs/'+str(period) )
+                 savefig = path+'/gen_imgs/'+str(period)+'.svg' )
     plt.show()
     
     # Save the npy of the current generated images
-    np.save('./T'+str(len(imgs))+'_L'+str(len(mps.tensors))+'/gen_imgs/'+str(period)+'.npy', gen_imgs)
+    np.save(path +'/gen_imgs/'+str(period)+'.npy', gen_imgs)
     
     return gen_imgs
 
-def plot_nll(nlls,baseline,mps,imgs,val_nlls,period_epochs = 1):
+def plot_nll(nlls,baseline,val_nlls,period_epochs = 1, path = './'):
     plt.plot(range(len(nlls)),nlls, label='training set')
     plt.title('Negative log-likelihood')
     plt.axhline(baseline,color = 'r', linestyle= 'dashed', label='baseline')
@@ -2208,7 +2336,8 @@ def plot_nll(nlls,baseline,mps,imgs,val_nlls,period_epochs = 1):
     plt.xticks(range(0,len(nlls),step)) # Ticks only show integers (epochs)
     plt.xlabel('epochs')
     plt.ylabel(r'$\mathcal{L}$')
-    if not os.path.exists('./'+'T'+str(len(imgs))+'_L'+str(len(mps.tensors))):
-            os.mkdir('./'+'T'+str(len(imgs))+'_L'+str(len(mps.tensors)))
-    plt.savefig('./'+'T'+str(len(imgs))+'_L'+str(len(mps.tensors))+'/loss', format='svg')
-    
+    plt.grid()
+    if not os.path.exists(path):
+            os.mkdir(path)
+    plt.savefig(path+'/loss.svg', format='svg')
+
