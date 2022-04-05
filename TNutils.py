@@ -1254,7 +1254,9 @@ def learning_step_torched(
         print('RIPPERONI')
 
     # Scale
-    A = A/np.sqrt(qtn.tensor_contract(A,A))
+    A = A/np.sqrt(qtn.tensor_contract(A,A)) # Being the MPS canonize towards 
+                                            # normalizing A keeps the MPS
+                                            # normalized
 
     # Now the tensor A_{i,i+1} must be split in I_k and I_{k+1}.
     # To preserve canonicalization:
@@ -1873,40 +1875,40 @@ def generate_sample(mps):
     '''
     Generate a sample from an MPS.
     0. normalize the mps (probabilities need to be computed)
-    1. left canonize the mps (to easily compute the conditional probabilities
-    2. Starting from the last pixel (vN):
-                                                 __                       __
-                                 +---IN         |     +---IN      +---IN    |
-                                 |   |       /  |     |   |       |   |     |
-                                 | [0,1]    /   |     | [0,1]   + | [1,0]   |
-      2.1 P(vN = [0,1]) =        | [0,1]   /    |     | [0,1]     | [1,0]   |
-                                 |   |          |     |   |       |   |     |
-                                 +---IN         |__   +---+       +---+   __|
+    1. right canonize the mps (to easily compute the conditional probabilities
+    2. Starting from the fist pixel (v0):
+                                              __                        _ _
+                                I0---+       |     I0---+       I0---+     |
+                                 |   |    /  |     |    |       |    |     |
+                               [0,1] |   /   |    [0,1] |  +   [1,0] |     |
+      2.1 P(v0 = [0,1]) =      [0,1] |  /    |    [0,1] |      [1,0] |     |
+                                 |   | /     |     |    |       |    |     |
+                                I0---+       |__   I0---+       I0---+   __|
                                  
           (The denominator are the sum of probabilities that 
            saturates the state space, the sum of their probabilities,
            being the MPS normalized, is just 1.
            
-        2.1.1 Compute the probability of VN being [0,1] then draw a random
+        2.1.1 Compute the probability of V0 being [0,1] then draw a random
               number between 0 and 1, if the random number is less than
-              the probabiity computed vN becomes [0,1], else [1,0]
+              the probabiity computed v0 becomes [0,1], else [1,0]
               
-              vN then becomes either [0,1] or [1,0] (for the next steps too)
+              v0 then becomes either [0,1] or [1,0] (for the next steps too)
          
          
                                   
-      2.k P(vK = [0,1]| v{K+1], ..., vN) = P(vK, v{K+1}, vN) / P(v{K+1}, ..., vN) =
+      2.k P(vK = [0,1]| v{K-1}, ..., v0) = P(vK, v{K-1}, v0) / P(v{K-1}, ..., v0) =
       
-             =   +---IK---I{K+1}---...---IN         I{K+1}---...---IN
-                 |   |    |              |      /   |              |
-                 | [0,1]  v{K+1}         vN    /    v{K+1}         vN
-                 | [0,1]  v{K+1}         vN   /     v{K+1}         vN
-                 |   |    |              |   /      |              |
-                 +---IK---I{K+1}---...---IN         I{K+1}---...---IN
+             =   I0---...-I{K-1}---I{K+1}---+         I0---...---I{K-1}
+                 |        |        |        |     /   |              |
+                 v0       v{K-1}   v{k+1}   |    /    v0         v{K-1}
+                 v0       v{K-1}   v{k+1}   |   /     v0         v{K-1}
+                 |        |        |        |  /      |              |
+                 I0---...-I{K-1}---I{K+1}---+         I0---...---I{K-1}
                  
         2.k.1 Compute the probability of vK being [0,1] then draw a random
               number between 0 and 1, if the random number is less than
-              the probabiity computed vN becomes [0,1], else [1,0]
+              the probabiity computed vK becomes [0,1], else [1,0]
               
               vK then becomes either [0,1] or [1,0] (for the next steps too)
               
@@ -1917,25 +1919,25 @@ def generate_sample(mps):
     
     
     
-    # Canonicalize left
+    # Canonicalize right
     # We use the property of canonicalization to easily write
     # conditional probabilities
-    # By left canonicalizing we will sample from right (784th pixel)
-    # to left (1st pixel)
+    # By right canonicalizing we will sample from left (1st pixel)
+    # to right
     
-    # EDIT: IT'S BETTER TO RIGHT CANONIZE, ALL THE FIGURES ARE MIRRORED
+    # We right canonize because at the end of training the MPS should be right canonized
     mps.right_canonize()
     
     # First pixel
-    #   +----In    +
-    #   |     |    | half_contr
-    #   |     vn   +
-    #   |     vn
-    #   |     |
-    #   +----In
+    #            + I0----+
+    # half contr | |     |
+    #            + v0    |
+    #              v0    |
+    #              |     |    
+    #              I0----+
     # To reach efficiency, we gradually contract half_contr with 
     # the other tensors
-    # Contract vN to IN
+    # Contract v0 to I0
     
     # For the first contraction, we must take into account
     # the mps may not be normalized 
@@ -1951,7 +1953,7 @@ def generate_sample(mps):
         generated = [1]
         # We need to reconstruct half_contr that will be used for the
         # next pixel
-        # Contract vN to IN
+        # Contract v0 to I0
         half_contr = np.einsum('a,ba', [1,0], mps.tensors[0].data)
         p =  half_contr @ half_contr
         
@@ -1961,9 +1963,9 @@ def generate_sample(mps):
         # Contract vK to IK
         new_contr = np.einsum('a,bca->bc', [0,1], mps.tensors[index].data)
         # Contract new_contr to the contraction at the previous step
-        #   O-- previous_contr
-        #   |                  => new_contr -- previous_contr
-        #   vK
+        #   previous_contr--O
+        #                   |  => previous_contr -- new_contr
+        #                   vK
         new_contr = np.einsum('ba,b', new_contr, previous_contr)
     
         p = (new_contr @ new_contr)/(previous_contr @ previous_contr)
@@ -2115,7 +2117,7 @@ def reconstruct(mps, corr_img):
 
 def plot_true_n_rec(mps, img, axis, half, fraction, shape, savefig = '', N = 2):
     '''
-    Display the RECONSTRUCTION
+    Corrupt an image and display the original one and its reconstruction
     '''   
     
     # PREPARING CMAPS
@@ -2133,18 +2135,21 @@ def plot_true_n_rec(mps, img, axis, half, fraction, shape, savefig = '', N = 2):
     reccolors = [(1, 0, 0), (1, 1, 1)]
     reccmap = LinearSegmentedColormap.from_list('rec', reccolors, N=N)
     
-    # If the image is corrupted for partial reconstruction (pixels are set to -1)
+    # Corrupt
     cor_flat = partial_removal_img(img, fraction = fraction, axis = axis, half=half, shape=shape)
+    # Reconstruct
     rec_flat = reconstruct(mps, cor_flat)
-    cor_flat[cor_flat == -1] = 0
+    cor_flat[cor_flat == -1] = 0 # Set the corrupt pixels to 0 to display them nicely
     
     fig, ax = plt.subplots(1, 2, figsize=(4,2))
     
+    # LEFT: Original image
     ax[0].imshow(1-np.reshape(img, shape), cmap='gray')
     ax[0].set_xticks([])
     ax[0].set_yticks([])
     ax[0].set_title('Original')
     
+    # RIGHT: Reconstruction
     ax[1].imshow(1-np.reshape(rec_flat, shape), cmap=reccmap)
     ax[1].imshow(np.reshape(cor_flat, shape), cmap=corrupted_cmap)
     ax[1].set_xticks([])
@@ -2201,7 +2206,12 @@ def plot_dbonds(mps, savefig=''):
     plt.show()
 
 def bdims_imshow(mps, shape, savefig=''):
+    '''
+    Displays the bond dimensions of the MPS
+    '''
     fig, ax = plt.subplots()
+    # Append 0 to the mps.bond_sizes because the right bond dimension are
+    # len(mps.tensors) - 1 values (not a rectangle)
     heat = np.append(np.array(mps.bond_sizes()),0).reshape(shape)
     median = float((heat.max()-heat.min())/2)
     hm = ax.imshow(heat)
