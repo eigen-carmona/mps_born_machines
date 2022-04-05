@@ -1254,7 +1254,7 @@ def learning_step_torched(
         print('RIPPERONI')
 
     # Scale
-    A = A/A.data.max()
+    A = A/np.sqrt(qtn.tensor_contract(A,A))
 
     # Now the tensor A_{i,i+1} must be split in I_k and I_{k+1}.
     # To preserve canonicalization:
@@ -1780,7 +1780,6 @@ def training_and_probing_torched(
                                     **kwargs
                                     )
         train_costs.extend(costs)
-
         if len(val_imgs)>0:
             val_costs.append(computeNLL(mps, val_imgs, 0))
 
@@ -1870,7 +1869,7 @@ def generate_samples(mps,N):
                 np.array(unmask.sum()*[extra_term])
                 )
 
-def generate_sample(mps, reconstruct = False):
+def generate_sample(mps):
     '''
     Generate a sample from an MPS.
     0. normalize the mps (probabilities need to be computed)
@@ -1923,8 +1922,9 @@ def generate_sample(mps, reconstruct = False):
     # conditional probabilities
     # By left canonicalizing we will sample from right (784th pixel)
     # to left (1st pixel)
-    if not reconstruct:
-        mps.left_canonize()
+    
+    # EDIT: IT'S BETTER TO RIGHT CANONIZE, ALL THE FIGURES ARE MIRRORED
+    mps.right_canonize()
     
     # First pixel
     #   +----In    +
@@ -1941,54 +1941,54 @@ def generate_sample(mps, reconstruct = False):
     # the mps may not be normalized 
     # for all the other one we have ratios of probabilities 
     # and normalization will not matter
-    half_contr = np.einsum('a,ba', [0,1], mps.tensors[-1].data)
+    half_contr = np.einsum('a,ba', [0,1], mps.tensors[0].data)
     p0 =  half_contr @ half_contr 
-    half_contr1 = np.einsum('a,ba', [1,0], mps.tensors[-1].data)
+    half_contr1 = np.einsum('a,ba', [1,0], mps.tensors[0].data)
     p1 = half_contr1 @ half_contr1 
     if np.random.rand() < (p0/(p0+p1)):
-        generated = deque([0])
+        generated = [0]
     else:
-        generated = deque([1])
+        generated = [1]
         # We need to reconstruct half_contr that will be used for the
         # next pixel
         # Contract vN to IN
-        half_contr = np.einsum('a,ba', [1,0], mps.tensors[-1].data)
+        half_contr = np.einsum('a,ba', [1,0], mps.tensors[0].data)
         p =  half_contr @ half_contr
         
     previous_contr = half_contr
         
-    for index in range(len(mps.tensors)-2,0,-1):
+    for index in range(1,len(mps.tensors)-1):
         # Contract vK to IK
         new_contr = np.einsum('a,bca->bc', [0,1], mps.tensors[index].data)
         # Contract new_contr to the contraction at the previous step
         #   O-- previous_contr
         #   |                  => new_contr -- previous_contr
         #   vK
-        new_contr = np.einsum('ab,b', new_contr, previous_contr)
+        new_contr = np.einsum('ba,b', new_contr, previous_contr)
     
         p = (new_contr @ new_contr)/(previous_contr @ previous_contr)
         if np.random.rand() < p:
-            generated.appendleft(0)
+            generated.append(0)
         else:
-            generated.appendleft(1)
+            generated.append(1)
             # Contract [1,0] instead of [0,1]
             new_contr = np.einsum('a,bca->bc', [1,0], mps.tensors[index].data)
-            new_contr = np.einsum('ab,b', new_contr, previous_contr)
+            new_contr = np.einsum('ba,b', new_contr, previous_contr)
             
             p = (new_contr @ new_contr)/(previous_contr @ previous_contr)
             
         previous_contr = new_contr
     
     # Last pixel
-    new_contr = np.einsum('a,ba', [0,1], mps.tensors[0].data)
+    new_contr = np.einsum('a,ba', [0,1], mps.tensors[-1].data)
     new_contr = new_contr @ previous_contr
     
     p = (new_contr**2)/(previous_contr @ previous_contr)
     
     if np.random.rand() < p:
-        generated.appendleft(0)
+        generated.append(0)
     else:
-        generated.appendleft(1)
+        generated.append(1)
         
     return generated
 
@@ -2049,20 +2049,19 @@ def reconstruct_SLOW(mps, corr_img):
     return reconstructed
 
 def reconstruct(mps, corr_img):
-    
     # Copy the tensor, we need to perform vertical
     # contractions among all know pixels
     rec_mps = copy.copy(mps)
     rec_mps.normalize()
-    
+
     # Contracting know pixels
     corr_img_tn = tens_picture(corr_img)
-    
+
     for site, img_tensor in enumerate(corr_img_tn):
         if img_tensor: # if img_tensor is not None
             contr = tneinsum2(img_tensor, rec_mps[site])
             rec_mps[site].modify(data=contr.data, inds=contr.inds)
-    
+
     first = False # check if we already found an unknown pixel
     upixel = -1
     for site in range(len(rec_mps.tensors)):
@@ -2094,27 +2093,70 @@ def reconstruct(mps, corr_img):
                     utn.tensors[-1].modify(data=finalcontr.data, inds = finalcontr.inds)
                 else:
                     ut = tneinsum2(ut, rec_mps.tensors[site+1])
-                    
+
     utn = qtn.tensor_1d.TensorNetwork1DFlat(utn.tensors)
     # In order to left canonize i need a class that is a 
     # TensorNetwork1DFlat or MatrixProductState, but
     # I did not manage to transform utn in a MatrixProductState
-    
+
     # The following attributes are needed for leftcanonizing
     utn.cyclic = rec_mps.cyclic
     utn._L = len(utn.tensors)
+    utn.nsites = len(utn.tensors)
     utn._site_tag_id = 'U{}'
-    
-    utn.left_canonize()
-    
+
     # Generate from the unknown pixels network
-    reconstruction = generate_sample(utn, reconstruct = True)
-    
+    reconstruction = generate_sample(utn)
+
     rec_img = copy.copy(corr_img)
     rec_img[rec_img == -1] = reconstruction
-    
+
     return rec_img
- 
+
+def plot_true_n_rec(mps, img, axis, half, fraction, shape, savefig = '', N = 2):
+    '''
+    Display the RECONSTRUCTION
+    '''   
+    
+    # PREPARING CMAPS
+    greycmap = pl.cm.Greys
+
+    # Get the colormap colors
+    corrupted_cmap = greycmap(np.arange(greycmap.N))
+
+    # Set alpha
+    corrupted_cmap[:,-1] = np.linspace(0, 1, greycmap.N)
+
+    # Create new colormap
+    corrupted_cmap = ListedColormap(corrupted_cmap)
+    
+    reccolors = [(1, 0, 0), (1, 1, 1)]
+    reccmap = LinearSegmentedColormap.from_list('rec', reccolors, N=N)
+    
+    # If the image is corrupted for partial reconstruction (pixels are set to -1)
+    cor_flat = partial_removal_img(img, fraction = fraction, axis = axis, half=half, shape=shape)
+    rec_flat = reconstruct(mps, cor_flat)
+    cor_flat[cor_flat == -1] = 0
+    
+    fig, ax = plt.subplots(1, 2, figsize=(4,2))
+    
+    ax[0].imshow(1-np.reshape(img, shape), cmap='gray')
+    ax[0].set_xticks([])
+    ax[0].set_yticks([])
+    ax[0].set_title('Original')
+    
+    ax[1].imshow(1-np.reshape(rec_flat, shape), cmap=reccmap)
+    ax[1].imshow(np.reshape(cor_flat, shape), cmap=corrupted_cmap)
+    ax[1].set_xticks([])
+    ax[1].set_yticks([])
+    ax[1].set_title('Reconstructed')
+    
+    if savefig != '':
+        # save the picture as svg in the location determined by savefig
+        plt.savefig(savefig+'.svg', format='svg')
+    
+    plt.show()
+    
 #  ____   
 # | ___|  
 # |___ \  
