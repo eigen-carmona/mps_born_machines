@@ -906,6 +906,27 @@ def computeNLL_cached(mps, _imgs, img_cache, index):
     #        |T| |_  /_                      _|    |T| /_
     return -(2/len(_imgs))*sum_log + np.log(Z)
 
+def computeNLL_torched(mps,imgs,torch_mps,torch_imgs,inds_dict):
+    # ! It is assumed that the the mps is right canonized
+    mps_inds = inds_dict['mps'][0]
+    inds_in = [mps_inds,mps_inds]
+    _Z,_ = torch_contract(tuple(inds_in),torch_mps[0],torch_mps[0])
+    Z = _Z.cpu().detach().numpy()
+    _inds_dict = copy.copy(inds_dict)
+    psi, _ = torchized_cache(torch_mps,torch_imgs,_inds_dict,True)
+    if 0 in psi:
+        # Sometimes the accuracy is too limited...
+        # Fallback to computeNLL
+        del Z, psi
+        print(f'Unable to compute NLL with torch variables')
+        return computeNLL(mps,imgs)
+    _psi = psi.cpu().detach().numpy()
+    sum_log = np.sum(np.log(np.abs(_psi)))
+    size = torch_imgs[0].shape[0]
+    nll = -2*sum_log/size + np.log(Z)
+    del _psi,_Z
+    return nll
+
 def compress(mps, max_bond):
     
     for index in range(len(mps.tensors)-2,-1,-1):
