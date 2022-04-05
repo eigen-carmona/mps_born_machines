@@ -6,6 +6,8 @@
 import numpy as np
 import cytoolz
 import dask as ds
+from dask.array import Array as daskarr
+import dask.array as da
 
 # Deep Learning stuff
 import torch
@@ -39,7 +41,6 @@ import pydash as _pd
 import copy
 import os
 #######################################################
-
 '''
 Wrapper for type checks.
 While defining a function, you can add the wrapper
@@ -110,7 +111,7 @@ class mps_lr:
         else:
             J = dNLL
         
-        self.past_grad[left_index] = np.mean(dNLL.data)/dNLL.data.max()
+        self.past_grad[left_index] = np.mean(dNLL.data)
         
         return J
             
@@ -177,7 +178,7 @@ def get_data(train_size = 1000, test_size = 100, grayscale_threshold = .5):
     # Return training set and test set
     return npmnist[:train_size], npmnist[train_size:]
 
-def plot_img(img_flat, shape, flip_color = True, border = False, savefig = ''):
+def plot_img(img_flat, shape, flip_color = True, border = False, savefig = '', title=''):
     '''
     Display the image from the flattened form
     '''
@@ -186,6 +187,9 @@ def plot_img(img_flat, shape, flip_color = True, border = False, savefig = ''):
         img_flat = np.copy(img_flat)
         img_flat[img_flat == -1] = 0
     plt.figure(figsize = (2,2))
+    
+    if title != '':
+        plt.title(title)
     # Background white, strokes black
     if flip_color:
         plt.imshow(1-np.reshape(img_flat,shape), cmap='gray')
@@ -346,7 +350,7 @@ def arr_inds_to_eq(inputs, output):
     return "i"+",i".join(in_str) + f"->i{out_str}"
 
 def into_data(tensor_array):
-    return np.array([ten.data for ten in tensor_array])
+    return np.array([ten.data.astype(np.float32) for ten in tensor_array])
 
 def _into_data(tensor_array):
     op_arr = []
@@ -358,7 +362,7 @@ def _into_data(tensor_array):
 def into_tensarr(data_arr,inds):
     return np.array([qtn.Tensor(data=data,inds=inds) for data in data_arr])
 
-def tneinsum3(*tensor_lists,backend = 'numpy'):
+def tneinsum3(*tensor_lists,backend = 'torch'):
     '''
     Takes arrays of tensors and contracts them element by element.
     '''
@@ -456,6 +460,10 @@ def left_right_cache(mps,_imgs):
     for site in range(len(mps.tensors)-1):
         machines = np.array(len(_imgs)*[mps[site]])
         contr_l = tneinsum3(curr_l[:,-1],machines,_imgs[:,site])
+        data = into_data(contr_l)
+        maxa = np.abs(data).max(axis = tuple(range(1,len(data.shape))))
+        data = data/maxa.reshape((len(_imgs),1))
+        contr_l = into_tensarr(data,contr_l[0].inds)
         contr_l = contr_l.reshape((len(_imgs),1))
         curr_l = np.hstack([curr_l,contr_l])
     curr_r = np.array(len(_imgs)*[qtn.Tensor()])
@@ -463,19 +471,68 @@ def left_right_cache(mps,_imgs):
     for site in range(len(mps.tensors)-1,0,-1):
         machines = np.array(len(_imgs)*[mps[site]])
         contr_r = tneinsum3(curr_r[:,0],machines,_imgs[:,site])
+        data = into_data(contr_r)
+        maxa = np.abs(data).max(axis = tuple(range(1,len(data.shape))))
+        data = data/maxa.reshape((len(_imgs),1))
+        contr_r = into_tensarr(data,contr_r[0].inds)
         contr_r = contr_r.reshape((len(_imgs),1))
         curr_r = np.hstack([contr_r,curr_r])
     img_cache = np.array([curr_l,curr_r]).transpose((1,0,2))
     return img_cache
 
+def ext_left_right_cache(mps,_imgs):
+    # WARNING: THIS IS EXTREMELY SLOW.
+    # It's more convenient to initialize on RAM and convert to dask array
+    curr_l = da.from_array(len(_imgs)*[qtn.Tensor()], chunks = (len(_imgs)))
+    curr_l = curr_l.reshape((len(_imgs),1))
+    for site in range(len(mps.tensors)-1):
+        machines = np.array(len(_imgs)*[mps[site]])
+        contr_l = tneinsum3(curr_l[:,-1].compute(),machines,_imgs[:,site])
+        contr_l = da.from_array(contr_l.reshape((len(_imgs),1)),chunks = (len(_imgs)))
+        curr_l = da.hstack((curr_l,contr_l))
+    curr_r = da.from_array(len(_imgs)*[qtn.Tensor()], chunks = (len(_imgs)))
+    curr_r = curr_r.reshape((len(_imgs),1))
+    for site in range(len(mps.tensors)-1,0,-1):
+        machines = np.array(len(_imgs)*[mps[site]])
+        contr_r = tneinsum3(curr_r[:,0].compute(),machines,_imgs[:,site])
+        contr_r = da.from_array(contr_r.reshape((len(_imgs),1)),chunks = (len(_imgs)))
+        curr_r = da.hstack((contr_r,curr_r))
+    img_cache = da.from_array([curr_l,curr_r],chunks = (1,len(_imgs),1)).transpose((1,0,2))
+    return img_cache
+
+
 def sequential_update(mps,_imgs,img_cache,site,going_right):
+    if type(img_cache) == daskarr:
+        return ext_sequential_update(mps,_imgs,img_cache,site,going_right)
     if going_right:
         left_cache = img_cache[:,0,site]
         left_imgs = _imgs[:,site]
         new_cache = tneinsum3(left_cache,np.array(len(_imgs)*[mps[site]]),left_imgs)
+        data = into_data(new_cache)
+        axes = tuple(range(1,len(data.shape)))
+        maxa = np.abs(data).max(axis = axes)
+        data = data/maxa.reshape((len(_imgs),1))
+        new_cache = into_tensarr(data,new_cache[0].inds)
         img_cache[:,0,site+1] = new_cache
     else:
         right_cache = img_cache[:,1,site+1]
+        right_imgs = _imgs[:,site+1]
+        new_cache = tneinsum3(right_cache,np.array(len(_imgs)*[mps[site+1]]),right_imgs)
+        data = into_data(new_cache)
+        axes = tuple(range(1,len(data.shape)))
+        maxa = np.abs(data).max(axis = axes)
+        data = data/maxa.reshape((len(_imgs),1))
+        new_cache = into_tensarr(data,new_cache[0].inds)
+        img_cache[:,1,site] = new_cache
+
+def ext_sequential_update(mps,_imgs,img_cache,site,going_right):
+    if going_right:
+        left_cache = img_cache[:,0,site].compute()
+        left_imgs = _imgs[:,site]
+        new_cache = tneinsum3(left_cache,np.array(len(_imgs)*[mps[site]]),left_imgs)
+        img_cache[:,0,site+1] = new_cache
+    else:
+        right_cache = img_cache[:,1,site+1].compute()
         right_imgs = _imgs[:,site+1]
         new_cache = tneinsum3(right_cache,np.array(len(_imgs)*[mps[site+1]]),right_imgs)
         img_cache[:,1,site] = new_cache
@@ -849,6 +906,27 @@ def computeNLL_cached(mps, _imgs, img_cache, index):
     #        |T| |_  /_                      _|    |T| /_
     return -(2/len(_imgs))*sum_log + np.log(Z)
 
+def computeNLL_torched(mps,imgs,torch_mps,torch_imgs,inds_dict):
+    # ! It is assumed that the the mps is right canonized
+    mps_inds = inds_dict['mps'][0]
+    inds_in = [mps_inds,mps_inds]
+    _Z,_ = torch_contract(tuple(inds_in),torch_mps[0],torch_mps[0])
+    Z = _Z.cpu().detach().numpy()
+    _inds_dict = copy.copy(inds_dict)
+    psi, _ = torchized_cache(torch_mps,torch_imgs,_inds_dict,True)
+    if 0 in psi:
+        # Sometimes the accuracy is too limited...
+        # Fallback to computeNLL
+        del Z, psi
+        print(f'Unable to compute NLL with torch variables')
+        return computeNLL(mps,imgs)
+    _psi = psi.cpu().detach().numpy()
+    sum_log = np.sum(np.log(np.abs(_psi)))
+    size = torch_imgs[0].shape[0]
+    nll = -2*sum_log/size + np.log(Z)
+    del _psi,_Z
+    return nll
+
 def compress(mps, max_bond):
     
     for index in range(len(mps.tensors)-2,-1,-1):
@@ -914,12 +992,388 @@ def compress2(mps, max_bond):
             
     return mps
 
-#   _____  
-#  |___ /  
-#    |_ \  
-#   ___) | 
+def torchized_mps(mps,inds_dict):
+    '''
+    Expects a quimb tensor network and a dictionary to place the indeces.
+    Returns an array with torch tensors for each of the mps sites.
+    '''
+    torch_mps = np.empty(len(mps.tensors),dtype = torch.Tensor)
+    for site, tens in enumerate(mps.tensors):
+        inds = tens.inds
+        _tens = torch.from_numpy(np.array(tens.data,dtype = np.float32))
+        inds_dict['mps'][site] = inds
+        if torch.cuda.is_available():
+            _tens = _tens.to('cuda')
+        torch_mps[site] = _tens
+        del _tens
+    return torch_mps
+
+def torchized_imgs(_imgs,inds_dict):
+    '''
+    Expects an array of quimb tensorized qubits.
+    Turns it into an array of torch tensors.
+    Theres one torch tensor per site,
+    of length equal to the number of images.
+    '''
+    torch_imgs = np.empty(_imgs.shape[1],dtype = torch.Tensor)
+    for site in range(_imgs.shape[1]):
+        inds = _imgs[:,site][0].inds
+        tens = torch.from_numpy(into_data(_imgs[:,site]))
+        inds_dict['imgs'][site] = (inds)
+        if torch.cuda.is_available():
+            tens = tens.to('cuda')
+        torch_imgs[site] = tens
+        del tens
+    return torch_imgs
+
+def torch_contract(inds_in,*tensors):
+    '''
+    Takes arrays of tensors and contracts them given the indeces.
+    Indeces are expected as a tuple of tuples.
+    Each of the inner tuples describes the indeces that correspond to the tensor.
+    ((i0,v1,i1),(i1,v2,i2))->(i0,v1,v2,i2)
+    [A[:, :, :],B[:, :, :]]->C[:, :, :, :]
+    '''
+    # Output indeces
+    inds_out = tuple(qtn.tensor_core._gen_output_inds(cytoolz.concat(inds_in)))
+    # Convert into einsum expression
+    eq = _inds_to_eq(inds_in, inds_out)
+    # Extract the shapes
+    shapes = [tens.shape for tens in tensors]
+    # prepare opteinsum reduction expression
+    expr = oe.contract_expression(eq,*shapes)
+    # execute and extract
+    data_arr = expr(*tensors,backend = 'torch')
+    return data_arr,inds_out
+
+def torch_multicontract(inds_in,*tensor_lists):
+    '''
+    Takes arrays of tensors and contracts them element by element.
+    '''
+    # Output indeces
+    inds_out = tuple(qtn.tensor_core._gen_output_inds(cytoolz.concat(inds_in)))
+    # Convert into einsum expression with extra index for entries
+    eq = arr_inds_to_eq(inds_in, inds_out)
+    # Extract the shapes
+    shapes = [tens.shape for tens in tensor_lists]
+    # prepare opteinsum reduction expression
+    expr = oe.contract_expression(eq,*shapes)
+    # execute and extract
+    data_arr = expr(*tensor_lists,backend = 'torch')
+    return data_arr,inds_out
+
+def sequential_update_torched(torch_mps,torch_imgs,torch_cache,site,going_right,inds_dict, rescale = True):
+    '''
+    Updates the cache for the given site and direction.
+    Can also be used to initialize cache.
+    '''
+    # TODO: exploit binary states
+    # TODO: adapt to masked version for lighter usage
+
+    # Direction-informed update arguments
+    current = site + 1*(not going_right)
+    target = site + 1*going_right
+    side = 'left'*going_right+'right'*(not going_right)
+    l = int(not going_right)
+
+    size = torch_imgs[current].shape[0]
+
+    tens_cache = torch_cache[0,l,current]
+    tens_imgs = torch_imgs[current]
+
+    # Broadcast mps for multicontraction. Usually way more efficient,
+    # though memory heavy.
+    tens_mps = torch.unsqueeze(torch_mps[current],0)[size*[0]]
+
+    # Extract info on the current position to update the next.
+    imgs_l_inds = inds_dict['imgs'][current]
+    mps_l_inds = inds_dict['mps'][current]
+    cache_inds = inds_dict[side][current]
+    inds_in = [mps_l_inds,imgs_l_inds]
+    tensors = [tens_mps,tens_imgs]
+    tensors = [tens_cache] + tensors
+    inds_in = [cache_inds] + inds_in
+
+    # Perform multicontraction
+    data, inds_out = torch_multicontract(tuple(inds_in),*tensors)
+
+    # Rescaling because of overflows
+    if rescale:
+        data = data/torch.max(data,dim=1,keepdim = True)[0]
+    new_cache = data
+
+    # Try to place in the GPU
+    if torch.cuda.is_available():
+      new_cache = new_cache.to('cuda')
+    inds_dict[side][target] = inds_out
+    torch_cache[0,l,target] = new_cache
+    del tens_cache,tens_imgs,tens_mps,tensors,new_cache,data
+    torch.cuda.empty_cache()
+
+def torchized_cache(torch_mps,torch_imgs,inds_dict,computing_psi = False):
+    '''
+    Initializes the torchized cache. Updates the indeces dictionary.
+    '''
+    size = torch_imgs[0].shape[0]
+    pixels = len(torch_mps)
+    torch_cache = np.empty(shape = (1,2,pixels),dtype = torch.Tensor)
+    nully = qtn.Tensor()
+    inds = nully.inds
+    tons = np.array(size*[nully])
+    tans = torch.from_numpy(into_data(tons))
+    if torch.cuda.is_available():
+        tans = tans.to('cuda')
+    torch_cache[0,0,0] = tans
+    torch_cache[0,1,-1] = tans
+    inds_dict['left'][0] = inds
+    inds_dict['right'][-1] = inds
+    for site in range(pixels-2,-1,-1):
+        sequential_update_torched(
+            torch_mps,torch_imgs,torch_cache,site,False,inds_dict,
+            rescale = not computing_psi)
+    del tans
+
+    # If we didn't rescale the cache, we can use it to compute psi
+    if computing_psi:
+        # We must contract the zeroth index of the right cache
+        img_inds = inds_dict['imgs'][0]
+        mps_inds = inds_dict['mps'][0]
+        cache_inds = inds_dict['right'][0]
+        inds_in = [cache_inds,mps_inds,img_inds]
+        mps_tens = torch.unsqueeze(torch_mps[0],0)[size*[0]]
+        tensors = [torch_cache[0,1,0],mps_tens,torch_imgs[0]]
+        psi, inds_out = torch_multicontract(tuple(inds_in),*tensors)
+        del tensors
+        return psi,inds_out
+
+    return torch_cache
+
+def arr_psi_primed_torched(torch_imgs,torch_cache,index,mask,inds_dict):
+    '''
+    Computes the derivative of psi up to a constant for a mask-sliced collection of images.
+    '''
+    # Extract the cache and free legs
+    left_cache = torch_cache[0,0,index][mask]
+    right_cache = torch_cache[0,1,index+1][mask]
+    left_imgs = torch_imgs[index][mask]
+    right_imgs = torch_imgs[index+1][mask]
+
+    # Extract the corresponding indeces
+    left_inds = inds_dict['left'][index]
+    right_inds = inds_dict['right'][index+1]
+    img_l_inds = inds_dict['imgs'][index]
+    img_r_inds = inds_dict['imgs'][index+1]
+
+    # Place together, they're friends
+    inds_in = [img_l_inds,img_r_inds]
+    tensors = [left_imgs,right_imgs]
+
+    # These don't always get along with the others...
+    if index != 0:
+        inds_in = [left_inds] + inds_in
+        tensors = [left_cache] + tensors
+    if index != len(torch_imgs)- 2:
+        inds_in = inds_in + [right_inds]
+        tensors = tensors + [right_cache]
+
+    # Contract in parallel
+    psi_primed_arr, inds_out = torch_multicontract(tuple(inds_in),*tensors)
+    del left_cache,right_cache,left_imgs,right_imgs,tensors
+    torch.cuda.empty_cache()
+    return psi_primed_arr, inds_out
+
+#   _____
+#  |___ /
+#    |_ \
+#   ___) |
 #  |____(_) LEARNING FUNCTIONS
-#######################################################        
+#######################################################
+
+def learning_step_torched(
+    torch_mps,
+    index,
+    torch_imgs,
+    lr,
+    torch_cache,
+    inds_dict,
+    mask,
+    going_right = True,
+    update_wrap = lambda site,div: div,
+    **kwargs):
+    '''
+    Compute the updated merged tensor A_{index,index+1}
+
+      UPDATE RULE:  A_{i,i+1} += lr* 2 *( A_{i,i+1}/Z - ( SUM_{i=1}^{m} psi'(v)/psi(v) )/m )
+    '''
+
+    # Merge I_k and I_{k+1} in a single rank 4 tensor ('i_{k-1}', 'v_k', 'i_{k+1}', 'v_{k+1}')
+    #A = qtn.tensor_contract(mps[index],mps[index+1])
+    #Z = qtn.tensor_contract(A,A)
+    inds_in = [inds_dict['mps'][index],inds_dict['mps'][index+1]]
+    _A, inds_out = torch_contract(tuple(inds_in),torch_mps[index],torch_mps[index+1])
+    _Z,_ = torch_contract((inds_out,inds_out),_A,_A)
+    A = qtn.Tensor(data = _A.cpu().detach().numpy(),inds = inds_out)
+
+    # Compute the derivative of PSI
+    _psi_primed_arr, _inds_out = arr_psi_primed_torched(torch_imgs,torch_cache,index,mask,inds_dict)
+
+    # TODO: Implement submasked version
+    _inds_in = [inds_out,_inds_out]
+    langsam = torch.unsqueeze(_A,0)[len(mask)*[0]]
+    _psi, _ = torch_multicontract(tuple(_inds_in),
+                                  langsam,
+                                  _psi_primed_arr)
+
+    # Setting the appropriate shape for an element wise quotient
+    new_shape = [len(mask),1,1,1]
+    if index not in [0,len(torch_mps)-2]:
+        new_shape.append(1)
+    _psifrac = _psi_primed_arr/torch.reshape(_psi,tuple(new_shape))
+
+    # We want the average
+    _psifrac = torch.sum(_psifrac, dim = 0)/len(mask)
+
+    # dNLL = 2A/Z - \frac{2}{|\mathcal{T}|}\sum{\psi'(v)/\psi}
+    _dNLL = _A/_Z
+    _dNLL = _dNLL.permute(tuple(np.argsort(inds_out))) - _psifrac.permute(tuple(np.argsort(_inds_out)))
+    inds_out = tuple(np.sort(inds_out))
+
+    # Go back to quimb for SVD computation on numba
+    dNLL = qtn.Tensor(data = _dNLL.cpu().detach().numpy(),inds = inds_out)
+
+    crash = 0 in _psi
+
+    # Release the GPU
+    del _dNLL,_psifrac,_psi,_A,_psi_primed_arr,langsam
+    torch.cuda.empty_cache()
+
+    if not crash:
+        # Perform descent
+        A = A - _pd.get(lr,'curr_lr',lr)*update_wrap(index, dNLL) # Update A_{i,i+1}
+    else:
+        print('RIPPERONI')
+
+    # Scale
+    A = A/np.sqrt(qtn.tensor_contract(A,A))
+
+    # Now the tensor A_{i,i+1} must be split in I_k and I_{k+1}.
+    # To preserve canonicalization:
+    # > if we are merging sliding towards the RIGHT we need to absorb right
+    #                                           S  v  D
+    #     ->-->--A_{k,k+1}--<--<-   =>   ->-->-->--x--<--<--<-   =>    >-->-->--o--<--<-
+    #      |  |    |   |    |  |          |  |  |   |    |  |          |  |  |  |  |  |
+    #
+    # > if we are merging sliding toward the LEFT we need to absorb left
+    #
+    if going_right:
+        # FYI: split method does apply SVD by default
+        # there are variations of svd that can be inspected
+        # for a performance boost
+        if index == 0:
+            SD = A.split(['v'+str(index)], absorb='right', **kwargs)
+        else:
+            SD = A.split(['i'+str(index-1),'v'+str(index)], absorb='right',**kwargs)
+    else:
+        if index == 0:
+            SD = A.split(['v'+str(index)], absorb='left', **kwargs)
+        else:
+            SD = A.split(['i'+str(index-1),'v'+str(index)], absorb='left',**kwargs)
+
+    # SD.tensors[0] -> I_{index}
+    # SD.tensors[1] -> I_{index+1}
+    return SD
+
+def learning_epoch_torched(
+    mps,
+    imgs,
+    torch_mps,
+    torch_imgs,
+    epochs,
+    initial_lr,
+    torch_cache,
+    inds_dict,
+    batch_size = 25,
+    update_wrap = lambda site, div: div,
+    lr_update = lambda lr: lr,
+    **kwargs):
+    '''
+    Manages the sliding left and right.
+    From tensor 1 (the second), apply learning_step() sliding to the right
+    At tensor max-2, apply learning_step() sliding to the left back to tensor 1
+    '''
+    # We expect, however, that the batch size is smaler than the input set
+    batch_size = min(len(imgs),batch_size)
+    guide = np.arange(len(imgs))
+    # Execute the epochs
+    cost = []
+    lr = copy.copy(initial_lr)
+    for epoch in range(epochs):
+        print(f'epoch {epoch+1}/{epochs}')
+        # [0,1,2,...,780,781,782,782,781,780,...,2,1,0]
+        progress = tq.tqdm([i for i in range(0,len(mps.tensors)-1)] + [i for i in range(len(mps.tensors)-2,-1,-1)], leave=True)
+
+        going_right = True
+        for index in progress:
+            np.random.shuffle(guide)
+            mask = guide[:batch_size]
+            A = learning_step_torched(
+                torch_mps,
+                index,
+                torch_imgs,
+                lr,
+                torch_cache,
+                inds_dict,
+                mask,
+                going_right,
+                update_wrap,
+                **kwargs)
+            if index == 0:
+                mps.tensors[index].modify(data=np.transpose(A.tensors[0].data,(1,0)))
+                mps.tensors[index+1].modify(data=A.tensors[1].data)
+            else:
+                mps.tensors[index].modify(data=np.transpose(A.tensors[0].data,(0,2,1)))
+                mps.tensors[index+1].modify(data=A.tensors[1].data)
+
+            # update the torched mps
+            tens = torch.from_numpy(np.array(mps[index].data,dtype = np.float32))
+            if torch.cuda.is_available():
+                tens = tens.to('cuda')
+            torch_mps[index] = tens
+            # Update also the reference dictionary
+            inds_dict['mps'][index] = mps[index].inds
+            tens = torch.from_numpy(np.array(mps[index+1].data,dtype = np.float32))
+            if torch.cuda.is_available():
+                tens = tens.to('cuda')
+            torch_mps[index+1] = tens
+            inds_dict['mps'][index+1] = mps[index+1].inds
+
+            # Update the cache for all images (for all? really?)
+            sequential_update_torched(torch_mps,torch_imgs,torch_cache,index,going_right,inds_dict)
+            # Place stuff where it belongs:
+            #if going_right and index < len(torch_mps) - 2:
+            #    torch_mps[index] = torch_mps[index].to('cpu')
+            #    torch_mps[index+2] = torch_mps[index+2].to('cuda')
+            #    # Current index goes to cpu
+            #    # index + 1 stays
+            #    # index + 2 is placed in gpu
+            #if not going_right and index > 0:
+            #    torch_mps[index+1] = torch_mps[index+1].to('cpu')
+            #    torch_mps[index-1] = torch_mps[index-1].to('cuda')
+            #    # index + 1 goes to cpu
+            #    # index stays
+            #    # index - 1 is placed in gpu
+            #p0 = computepsi(mps,imgs[0])**2
+            progress.set_description('Left Index: {}'.format(index))
+
+            if index == len(mps.tensors)-2:
+                going_right = False
+            torch.cuda.empty_cache()
+        nll = computeNLL_torched(mps,imgs,torch_mps,torch_imgs,inds_dict)
+        lr = lr_update(lr)
+        print('NLL: {} | Baseline: {}'.format(nll, np.log(len(imgs)) ) )
+        cost.append(nll)
+    # cha cha real smooth
+    return cost, lr
 
 def learning_step(mps, index, imgs, lr, going_right = True, **kwargs):
     '''
@@ -1028,9 +1482,22 @@ def learning_epoch_sgd(mps, imgs, epochs, lr, batch_size = 25,**kwargs):
     # cha cha real smooth
 
 def arr_psi_primed_cache(_imgs,img_cache,index):
+    if type(img_cache) == daskarr:
+        return ext_arr_psi_primed_cache(_imgs,img_cache,index)
     # Extract the cache and free legs
     left_cache = img_cache[:,0,index]
     right_cache = img_cache[:,1,index+1]
+    left_imgs = _imgs[:,index]
+    right_imgs = _imgs[:,index+1]
+
+    # Contract in parallel
+    psi_primed_arr = tneinsum3(left_cache,right_cache,left_imgs,right_imgs)
+    return psi_primed_arr
+
+def ext_arr_psi_primed_cache(_imgs,img_cache,index):
+    # Extract the cache and free legs
+    left_cache = img_cache[:,0,index].compute()
+    right_cache = img_cache[:,1,index+1].compute()
     left_imgs = _imgs[:,index]
     right_imgs = _imgs[:,index+1]
 
@@ -1100,6 +1567,7 @@ def learning_step_cached(
 
 def learning_epoch_cached(
     mps,
+    val_imgs,
     _imgs,
     epochs,
     initial_lr,
@@ -1153,7 +1621,7 @@ def learning_epoch_cached(
 
             if index == len(mps.tensors)-2:
                 going_right = False
-        nll = computeNLL_cached(mps, _imgs, img_cache,0)
+        nll = computeNLL(mps,val_imgs,0)#computeNLL_cached(mps, _imgs, img_cache,0)
         lr = lr_update(lr)
         print('NLL: {} | Baseline: {}'.format(nll, np.log(len(_imgs)) ) )
         cost.append(nll)
@@ -1205,6 +1673,133 @@ def cached_stochastic_learning_epoch(mps, val_imgs, _imgs, epochs, lr,img_cache,
     return cost
     # cha cha real smooth
 
+def lr_update(lr):
+    lr.new_epoch()
+    return lr
+    
+def training_and_probing(
+    period_epochs,
+    periods,
+    mps,
+    shape,
+    imgs,
+    _imgs,
+    img_cache,
+    batch_size,
+    lr,
+    lr_update,
+    update_wrap,
+    val_imgs = [],
+    period_samples = 0,
+    corrupted_set = None,
+    plot = False,
+    **kwargs):
+    # Initialize the training costs
+    train_costs = [computeNLL(mps, imgs,0)]
+    #train_costs = []
+
+    # TODO: adapt computeNLL to tneinsum3
+    val_costs = []
+    if len(val_imgs)>0:
+        # Initialize the validation costs
+        val_costs.append(computeNLL(mps, val_imgs, 0))
+
+
+    samples = []
+    
+    # begin the iteration
+    for period in range(periods):
+        costs, lr = learning_epoch_cached(mps,imgs,_imgs,period_epochs,lr,img_cache,
+                                          lr_update = lr_update,update_wrap = update_wrap,
+                                          batch_size = batch_size,**kwargs)
+        train_costs.extend(costs)
+        if len(val_imgs)>0:
+            val_costs.append(computeNLL(mps, val_imgs, 0))
+         
+        # Save MPS 
+        mps_checkpoint(mps, imgs, val_imgs, period, periods, train_costs, val_costs)
+        
+        # Plot and Save Loss curve
+        if plot:
+            plot_nll(train_costs,np.log(len(_imgs)),mps,imgs,val_costs, period_epochs)
+            plt.show()
+        
+        # Save Generated Images SVG and NPY
+        if period_samples > 0:
+            samples.append(generate_and_save(mps, period_samples, period, periods, period_epochs, imgs, shape))
+            
+    return train_costs, samples
+        
+def training_and_probing_torched(
+    period_epochs,
+    periods,
+    mps,
+    inds_dict,
+    torch_mps,
+    shape,
+    imgs,
+    _imgs,
+    torch_imgs,
+    torch_cache,
+    batch_size,
+    lr,
+    update_wrap = lambda site, div: div,
+    lr_update = lambda lr: lr,
+    val_imgs = [],
+    period_samples = 0,
+    corrupted_set = None,
+    plot = False,
+    path = './',
+    **kwargs):
+    # Initialize the training costs
+    train_costs = [computeNLL(mps, imgs,0)]
+    #train_costs = []
+
+    # TODO: adapt computeNLL to tneinsum3
+    val_costs = []
+    if len(val_imgs)>0:
+        # Initialize the validation costs
+        val_costs.append(computeNLL(mps, val_imgs, 0))
+
+
+    samples = []
+
+    # begin the iteration
+    for period in range(periods):
+        costs,lr = learning_epoch_torched(mps,
+                                    imgs,
+                                    torch_mps,
+                                    torch_imgs,
+                                    period_epochs,
+                                    lr,
+                                    torch_cache,
+                                    inds_dict,
+                                    batch_size = batch_size,
+                                    update_wrap = update_wrap,
+                                    lr_update = lr_update,
+                                    **kwargs
+                                    )
+        train_costs.extend(costs)
+        if len(val_imgs)>0:
+            val_costs.append(computeNLL(mps, val_imgs, 0))
+
+        # Save MPS
+        model_dir = mps_checkpoint(mps, imgs, val_imgs, period, periods, train_costs, val_costs, path = path)
+
+        # Plot and Save Loss curve
+        if plot:
+            plot_nll(train_costs,np.log(len(_imgs)),val_costs, period_epochs, path = model_dir)
+            plt.show()
+
+        # Save Generated Images SVG and NPY
+        if period_samples > 0:
+            samples.append(generate_and_save(mps, period_samples, period, periods, period_epochs, imgs, shape,path = model_dir))
+
+    # Finally, plot the bdims
+    bdims_imshow(mps, shape, savefig=model_dir+'/gen_imgs/'+'right_bdim.svg')
+
+    return train_costs, samples
+
 #   _  _    
 #  | || |   
 #  | || |_  
@@ -1236,7 +1831,7 @@ def generate_samples(mps,N):
     # Assumption: mps is right-canonized
     # Sampling first pixel. Only one probability has to be measured
     ampl = mps[0]@one(0)
-    p = ampl@ampl
+    p = ampl@ampl/(mps[0]@mps[0])
     # Generate a random sample for the first pixel of each image:
     rand = np.random.random(N)
     # Which are valid?
@@ -1274,7 +1869,7 @@ def generate_samples(mps,N):
                 np.array(unmask.sum()*[extra_term])
                 )
 
-def generate_sample(mps, reconstruct = False):
+def generate_sample(mps):
     '''
     Generate a sample from an MPS.
     0. normalize the mps (probabilities need to be computed)
@@ -1327,8 +1922,9 @@ def generate_sample(mps, reconstruct = False):
     # conditional probabilities
     # By left canonicalizing we will sample from right (784th pixel)
     # to left (1st pixel)
-    if not reconstruct:
-        mps.left_canonize()
+    
+    # EDIT: IT'S BETTER TO RIGHT CANONIZE, ALL THE FIGURES ARE MIRRORED
+    mps.right_canonize()
     
     # First pixel
     #   +----In    +
@@ -1345,54 +1941,54 @@ def generate_sample(mps, reconstruct = False):
     # the mps may not be normalized 
     # for all the other one we have ratios of probabilities 
     # and normalization will not matter
-    half_contr = np.einsum('a,ba', [0,1], mps.tensors[-1].data)
+    half_contr = np.einsum('a,ba', [0,1], mps.tensors[0].data)
     p0 =  half_contr @ half_contr 
-    half_contr1 = np.einsum('a,ba', [1,0], mps.tensors[-1].data)
+    half_contr1 = np.einsum('a,ba', [1,0], mps.tensors[0].data)
     p1 = half_contr1 @ half_contr1 
     if np.random.rand() < (p0/(p0+p1)):
-        generated = deque([0])
+        generated = [0]
     else:
-        generated = deque([1])
+        generated = [1]
         # We need to reconstruct half_contr that will be used for the
         # next pixel
         # Contract vN to IN
-        half_contr = np.einsum('a,ba', [1,0], mps.tensors[-1].data)
+        half_contr = np.einsum('a,ba', [1,0], mps.tensors[0].data)
         p =  half_contr @ half_contr
         
     previous_contr = half_contr
         
-    for index in range(len(mps.tensors)-2,0,-1):
+    for index in range(1,len(mps.tensors)-1):
         # Contract vK to IK
         new_contr = np.einsum('a,bca->bc', [0,1], mps.tensors[index].data)
         # Contract new_contr to the contraction at the previous step
         #   O-- previous_contr
         #   |                  => new_contr -- previous_contr
         #   vK
-        new_contr = np.einsum('ab,b', new_contr, previous_contr)
+        new_contr = np.einsum('ba,b', new_contr, previous_contr)
     
         p = (new_contr @ new_contr)/(previous_contr @ previous_contr)
         if np.random.rand() < p:
-            generated.appendleft(0)
+            generated.append(0)
         else:
-            generated.appendleft(1)
+            generated.append(1)
             # Contract [1,0] instead of [0,1]
             new_contr = np.einsum('a,bca->bc', [1,0], mps.tensors[index].data)
-            new_contr = np.einsum('ab,b', new_contr, previous_contr)
+            new_contr = np.einsum('ba,b', new_contr, previous_contr)
             
             p = (new_contr @ new_contr)/(previous_contr @ previous_contr)
             
         previous_contr = new_contr
     
     # Last pixel
-    new_contr = np.einsum('a,ba', [0,1], mps.tensors[0].data)
+    new_contr = np.einsum('a,ba', [0,1], mps.tensors[-1].data)
     new_contr = new_contr @ previous_contr
     
     p = (new_contr**2)/(previous_contr @ previous_contr)
     
     if np.random.rand() < p:
-        generated.appendleft(0)
+        generated.append(0)
     else:
-        generated.appendleft(1)
+        generated.append(1)
         
     return generated
 
@@ -1453,20 +2049,19 @@ def reconstruct_SLOW(mps, corr_img):
     return reconstructed
 
 def reconstruct(mps, corr_img):
-    
     # Copy the tensor, we need to perform vertical
     # contractions among all know pixels
     rec_mps = copy.copy(mps)
     rec_mps.normalize()
-    
+
     # Contracting know pixels
     corr_img_tn = tens_picture(corr_img)
-    
+
     for site, img_tensor in enumerate(corr_img_tn):
         if img_tensor: # if img_tensor is not None
             contr = tneinsum2(img_tensor, rec_mps[site])
             rec_mps[site].modify(data=contr.data, inds=contr.inds)
-    
+
     first = False # check if we already found an unknown pixel
     upixel = -1
     for site in range(len(rec_mps.tensors)):
@@ -1498,27 +2093,70 @@ def reconstruct(mps, corr_img):
                     utn.tensors[-1].modify(data=finalcontr.data, inds = finalcontr.inds)
                 else:
                     ut = tneinsum2(ut, rec_mps.tensors[site+1])
-                    
+
     utn = qtn.tensor_1d.TensorNetwork1DFlat(utn.tensors)
     # In order to left canonize i need a class that is a 
     # TensorNetwork1DFlat or MatrixProductState, but
     # I did not manage to transform utn in a MatrixProductState
-    
+
     # The following attributes are needed for leftcanonizing
     utn.cyclic = rec_mps.cyclic
     utn._L = len(utn.tensors)
+    utn.nsites = len(utn.tensors)
     utn._site_tag_id = 'U{}'
-    
-    utn.left_canonize()
-    
+
     # Generate from the unknown pixels network
-    reconstruction = generate_sample(utn, reconstruct = True)
-    
+    reconstruction = generate_sample(utn)
+
     rec_img = copy.copy(corr_img)
     rec_img[rec_img == -1] = reconstruction
-    
+
     return rec_img
- 
+
+def plot_true_n_rec(mps, img, axis, half, fraction, shape, savefig = '', N = 2):
+    '''
+    Display the RECONSTRUCTION
+    '''   
+    
+    # PREPARING CMAPS
+    greycmap = pl.cm.Greys
+
+    # Get the colormap colors
+    corrupted_cmap = greycmap(np.arange(greycmap.N))
+
+    # Set alpha
+    corrupted_cmap[:,-1] = np.linspace(0, 1, greycmap.N)
+
+    # Create new colormap
+    corrupted_cmap = ListedColormap(corrupted_cmap)
+    
+    reccolors = [(1, 0, 0), (1, 1, 1)]
+    reccmap = LinearSegmentedColormap.from_list('rec', reccolors, N=N)
+    
+    # If the image is corrupted for partial reconstruction (pixels are set to -1)
+    cor_flat = partial_removal_img(img, fraction = fraction, axis = axis, half=half, shape=shape)
+    rec_flat = reconstruct(mps, cor_flat)
+    cor_flat[cor_flat == -1] = 0
+    
+    fig, ax = plt.subplots(1, 2, figsize=(4,2))
+    
+    ax[0].imshow(1-np.reshape(img, shape), cmap='gray')
+    ax[0].set_xticks([])
+    ax[0].set_yticks([])
+    ax[0].set_title('Original')
+    
+    ax[1].imshow(1-np.reshape(rec_flat, shape), cmap=reccmap)
+    ax[1].imshow(np.reshape(cor_flat, shape), cmap=corrupted_cmap)
+    ax[1].set_xticks([])
+    ax[1].set_yticks([])
+    ax[1].set_title('Reconstructed')
+    
+    if savefig != '':
+        # save the picture as svg in the location determined by savefig
+        plt.savefig(savefig+'.svg', format='svg')
+    
+    plt.show()
+    
 #  ____   
 # | ___|  
 # |___ \  
@@ -1563,15 +2201,26 @@ def plot_dbonds(mps, savefig=''):
     plt.show()
 
 def bdims_imshow(mps, shape, savefig=''):
+    fig, ax = plt.subplots()
     heat = np.append(np.array(mps.bond_sizes()),0).reshape(shape)
-    hm = plt.imshow(heat)
+    median = float((heat.max()-heat.min())/2)
+    hm = ax.imshow(heat)
+    ax.set_xticks([])
+    ax.set_yticks([])
+    if shape[0]*shape[1] <= 64:
+        for i in range(heat.shape[0]):
+            for j in range(heat.shape[1]):
+                value = heat[i, j]
+                color = "w"*int(value<=median)+"b"*int(value>median)
+                text = ax.text(j, i, value,
+                           ha="center", va="center", color=color,fontweight='bold')
     plt.colorbar(hm)
-    
+
     plt.title('(Right) bond dimension for every pixel')
-    
+
     if savefig != '':
         # save the picture as svg in the location determined by savefig
-        plt.savefig(savefig, format='svg')
+        fig.savefig(savefig, format='svg')
     plt.show()
         
 #  __    
@@ -1600,9 +2249,6 @@ def bars_n_stripes(N_samples, dim = 4):
         if not any((sample == x).all() for x in samples):
             samples.append(sample)
             _ = _ + 1
-            
-    return samples
-
             
     return samples
 
@@ -1657,3 +2303,83 @@ def meanpool2d(npmnist, shape, grayscale_threshold = 0.3):
     ds_imgs[ds_imgs <= grayscale_threshold] = 0
     
     return ds_imgs
+
+def mps_checkpoint(mps, imgs, val_imgs, period, periods, train_cost, val_cost, path = './'):
+    # Save the mps
+    oldfilename = str(period-1)+'I'+str(periods-1)
+    filename = str(period)+'I'+str(periods-1)
+    foldname = 'T'+str(len(imgs))+'_L'+str(len(mps.tensors))
+    # If folder does not exists
+    if not os.path.exists(path+foldname):
+        # Make the folder
+        os.makedirs(path+foldname)
+
+    if os.path.isfile(path+foldname+'/'+oldfilename+'.mps'):
+        os.remove(path+foldname+'/'+oldfilename+'.mps')
+
+    quimb.utils.save_to_disk(mps, path+foldname+'/'+filename+'.mps')
+
+    # Save training and val loss
+    np.save(path+foldname+'/trainloss', train_cost)
+    np.save(path+foldname+'/valloss', val_cost)
+
+    # Save img and val_img
+    if period == 0:
+        np.save(path+foldname+'/train_set.npy', imgs)
+        np.save(path+foldname+'/val_set.npy', val_imgs)
+
+    # Where are we placing stuff now?
+    return path + foldname + '/'
+
+def generate_and_save(mps, period_samples, period, periods, period_epochs, imgs, shape, path = './'):
+    # If images are more than one, we display using subplots
+    if period_samples > 1:
+        # Generate images
+        gen_imgs = generate_samples(mps,period_samples)
+        # Create the subfolder for gen_imgs if it does not exists
+        if not os.path.exists(path+'/gen_imgs'):
+            os.mkdir(path+'/gen_imgs')
+
+        fig, ax = plt.subplots(1, period_samples, figsize=(2*period_samples,2))
+        for i in range(period_samples):
+            ax[i].imshow(1-gen_imgs[i].reshape(shape), cmap='gray')
+            ax[i].set_xticks([])
+            ax[i].set_yticks([])
+        fig.suptitle('Generated images: {}/{}'.format(period_epochs*(period+1),period_epochs*periods))
+        plt.savefig(path+'/gen_imgs/'+str(period)+'.svg', format='svg')
+    
+    # if period_samples == 1, we display using plot_img function    
+    else:
+        # Generate images
+        gen_imgs = generate_sample(mps)
+        # Create the subfolder for gen_imgs if it does not exists
+        if not os.path.exists(path+'/gen_imgs'):
+            os.mkdir(path+'/gen_imgs')
+
+        plot_img(gen_imgs, shape, border = True, 
+                 title = 'Generated image: {}/{}'.format(period_epochs*(period+1),period_epochs*periods),
+                 savefig = path+'/gen_imgs/'+str(period)+'.svg' )
+    plt.show()
+    
+    # Save the npy of the current generated images
+    np.save(path +'/gen_imgs/'+str(period)+'.npy', gen_imgs)
+    
+    return gen_imgs
+
+def plot_nll(nlls,baseline,val_nlls,period_epochs = 1, path = './'):
+    plt.plot(range(len(nlls)),nlls, label='training set')
+    plt.title('Negative log-likelihood')
+    plt.axhline(baseline,color = 'r', linestyle= 'dashed', label='baseline')
+    if len(val_nlls) > 0:
+        plt.plot(range(0,len(nlls),period_epochs),val_nlls, label='test set')
+    plt.legend()
+    step = np.round(len(nlls)/10).astype(int)
+    if step == 0: step = 1
+    plt.xticks(range(0,len(nlls),step)) # Ticks only show integers (epochs)
+    plt.xlabel('epochs')
+    plt.ylabel(r'$\mathcal{L}$')
+    plt.grid()
+    if not os.path.exists(path):
+            os.mkdir(path)
+    plt.savefig(path+'/loss.svg', format='svg')
+
