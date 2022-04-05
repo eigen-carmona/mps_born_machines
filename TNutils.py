@@ -111,7 +111,7 @@ class mps_lr:
         else:
             J = dNLL
         
-        self.past_grad[left_index] = np.mean(dNLL.data)/dNLL.data.max()
+        self.past_grad[left_index] = np.mean(dNLL.data)
         
         return J
             
@@ -1241,12 +1241,17 @@ def learning_step_torched(
     # Go back to quimb for SVD computation on numba
     dNLL = qtn.Tensor(data = _dNLL.cpu().detach().numpy(),inds = inds_out)
 
+    crash = 0 in _psi
+
     # Release the GPU
     del _dNLL,_psifrac,_psi,_A,_psi_primed_arr,langsam
     torch.cuda.empty_cache()
 
-    # Perform descent
-    A = A - _pd.get(lr,'curr_lr',lr)*update_wrap(index, dNLL) # Update A_{i,i+1}
+    if not crash:
+        # Perform descent
+        A = A - _pd.get(lr,'curr_lr',lr)*update_wrap(index, dNLL) # Update A_{i,i+1}
+    else:
+        print('RIPPERONI')
 
     # Scale
     A = A/A.data.max()
