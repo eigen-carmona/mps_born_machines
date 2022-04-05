@@ -1041,7 +1041,7 @@ def torch_multicontract(inds_in,*tensor_lists):
     data_arr = expr(*tensor_lists,backend = 'torch')
     return data_arr,inds_out
 
-def sequential_update_torched(torch_mps,torch_imgs,torch_cache,site,going_right,inds_dict):
+def sequential_update_torched(torch_mps,torch_imgs,torch_cache,site,going_right,inds_dict, rescale = True):
     '''
     Updates the cache for the given site and direction.
     Can also be used to initialize cache.
@@ -1077,17 +1077,19 @@ def sequential_update_torched(torch_mps,torch_imgs,torch_cache,site,going_right,
     data, inds_out = torch_multicontract(tuple(inds_in),*tensors)
 
     # Rescaling because of overflows
-    new_cache = data/torch.max(data,dim=1,keepdim = True)[0]
+    if rescale:
+        data = data/torch.max(data,dim=1,keepdim = True)[0]
+    new_cache = data
 
     # Try to place in the GPU
     if torch.cuda.is_available():
       new_cache = new_cache.to('cuda')
     inds_dict[side][target] = inds_out
     torch_cache[0,l,target] = new_cache
-    del tens_cache,tens_imgs,tens_mps,tensors,new_cache
+    del tens_cache,tens_imgs,tens_mps,tensors,new_cache,data
     torch.cuda.empty_cache()
 
-def torchized_cache(torch_mps,torch_imgs,inds_dict):
+def torchized_cache(torch_mps,torch_imgs,inds_dict,computing_psi = False):
     '''
     Initializes the torchized cache. Updates the indeces dictionary.
     '''
@@ -1105,8 +1107,24 @@ def torchized_cache(torch_mps,torch_imgs,inds_dict):
     inds_dict['left'][0] = inds
     inds_dict['right'][-1] = inds
     for site in range(pixels-2,-1,-1):
-        sequential_update_torched(torch_mps,torch_imgs,torch_cache,site,False,inds_dict)
+        sequential_update_torched(
+            torch_mps,torch_imgs,torch_cache,site,False,inds_dict,
+            rescale = not computing_psi)
     del tans
+
+    # If we didn't rescale the cache, we can use it to compute psi
+    if computing_psi:
+        # We must contract the zeroth index of the right cache
+        img_inds = inds_dict['imgs'][0]
+        mps_inds = inds_dict['mps'][0]
+        cache_inds = inds_dict['right'][0]
+        inds_in = [cache_inds,mps_inds,img_inds]
+        mps_tens = torch.unsqueeze(torch_mps[0],0)[size*[0]]
+        tensors = [torch_cache[0,1,0],mps_tens,torch_imgs[0]]
+        psi, inds_out = torch_multicontract(tuple(inds_in),*tensors)
+        del tensors
+        return psi,inds_out
+
     return torch_cache
 
 def arr_psi_primed_torched(torch_imgs,torch_cache,index,mask,inds_dict):
