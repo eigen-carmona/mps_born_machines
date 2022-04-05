@@ -2160,12 +2160,13 @@ def bdims_imshow(mps, shape, savefig=''):
     hm = ax.imshow(heat)
     ax.set_xticks([])
     ax.set_yticks([])
-    for i in range(heat.shape[0]):
-        for j in range(heat.shape[1]):
-            value = heat[i, j]
-            color = "w"*int(value<=median)+"b"*int(value>median)
-            text = ax.text(j, i, value,
-                       ha="center", va="center", color=color,fontweight='bold')
+    if shape[0]*shape[1] <= 64:
+        for i in range(heat.shape[0]):
+            for j in range(heat.shape[1]):
+                value = heat[i, j]
+                color = "w"*int(value<=median)+"b"*int(value>median)
+                text = ax.text(j, i, value,
+                           ha="center", va="center", color=color,fontweight='bold')
     plt.colorbar(hm)
 
     plt.title('(Right) bond dimension for every pixel')
