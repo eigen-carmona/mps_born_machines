@@ -3,7 +3,15 @@
 ### Final Project of Quantum Information and Computing
 ---
 
-Add documentation
+### Generated images:
+![alt text](https://raw.githubusercontent.com/eigen-carmona/mps_born_machines/main/imgs/gen_examples.png)
+
+### Reconstructed images:
+![alt text](https://raw.githubusercontent.com/eigen-carmona/mps_born_machines/main/imgs/rec1.png)
+![alt text](https://raw.githubusercontent.com/eigen-carmona/mps_born_machines/main/imgs/rec2.png)
+![alt text](https://raw.githubusercontent.com/eigen-carmona/mps_born_machines/main/imgs/rec3.png)
+![alt text](https://raw.githubusercontent.com/eigen-carmona/mps_born_machines/main/imgs/test_rec1.png)
+
 
 ---
 ***Exercise 1:***
