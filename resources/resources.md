@@ -11,4 +11,4 @@
 ### Other Resources:
 * [quimb’s documentation](https://quimb.readthedocs.io/en/latest/index.html)
 * [congzlwag's Repository](https://github.com/congzlwag/UnsupGenModbyMPS)
-* [Pan Zhang MPS Tutorial (,ipynb)](https://github.com/ey3lock3r/MPS-Tutorial/blob/master/mps_tutorial.ipynb)
+* [Pan Zhang MPS Tutorial (.ipynb)](https://github.com/ey3lock3r/MPS-Tutorial/blob/master/mps_tutorial.ipynb)
